@@ -1,0 +1,40 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# ── Dati app: DB con segreti (API key) + dati personali — MAI committare ──
+deja.db
+deja.db-wal
+deja.db-shm
+*.db-wal
+*.db-shm
+
+# ── Build / dist ──
+build/
+dist/
+build_log.txt
+
+# ── Sito web (ha il suo .gitignore) ──
+web/node_modules/
+web/.next/
+web/.env
+web/*.db
+
+# ── IDE / OS ──
+.vs/
+.idea/
+.vscode/
+*.log
+.DS_Store
+
+# ── Stato locale editor / tool (può contenere token: NON committare) ──
+.claude/
+.obsidian/
+obsidian/**/.obsidian/
+
+# ── File di debug / audio personali ──
+*.wav
+debug_audio.wav
