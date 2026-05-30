@@ -33,7 +33,9 @@ web/*.db
 # ── Stato locale editor / tool (può contenere token: NON committare) ──
 .claude/
 .obsidian/
-obsidian/**/.obsidian/
+
+# ── Vault Obsidian: note interne personali, NON pubblicare ──
+obsidian/
 
 # ── File di debug / audio personali ──
 *.wav
