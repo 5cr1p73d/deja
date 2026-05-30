@@ -20,5 +20,5 @@ if errorlevel 1 (
 )
 
 echo.
-echo [build] OK -> dist\Deja\Deja.exe
+echo [build] OK: dist\Deja\Deja.exe
 echo [build] Per creare l'installer: compila deja.iss con Inno Setup (iscc deja.iss).

@@ -15,7 +15,7 @@ deja.db-shm
 # ── Build / dist ──
 build/
 dist/
-build_log.txt
+build_log*.txt
 
 # ── Sito web (ha il suo .gitignore) ──
 web/node_modules/
