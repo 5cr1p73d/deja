@@ -10,7 +10,10 @@ export const REPO_URL =
 export const DOWNLOAD_URL =
   process.env.NEXT_PUBLIC_DOWNLOAD_URL || `${REPO_URL}/releases`;
 
-export const INSTALLER_NAME = `Deja-Setup-${APP_VERSION}.exe`;
+// Build portatile pubblicata nelle Release (zip onedir: estrai ed esegui Deja.exe).
+// Quando ci sarà l'installer Inno Setup, cambiare in `Deja-Setup-${APP_VERSION}.exe`.
+export const INSTALLER_NAME =
+  process.env.NEXT_PUBLIC_INSTALLER_NAME || `Deja-${APP_VERSION}-win64.zip`;
 
 // Dimensione indicativa del bundle onedir (torch + modelli).
-export const INSTALLER_SIZE = process.env.NEXT_PUBLIC_INSTALLER_SIZE || "~320 MB";
+export const INSTALLER_SIZE = process.env.NEXT_PUBLIC_INSTALLER_SIZE || "~270 MB";
