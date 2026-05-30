@@ -1,5 +1,6 @@
 # main.py
 import sys
+import os
 import threading
 import traceback
 import logging
@@ -11,12 +12,45 @@ try:
 except Exception:
     pass
 
+# ── Ambiente PRIMA di qualsiasi import che tiri torch ──────────────
+# Deve venire prima di `import torch` (e degli import transitivi via
+# sentence_transformers / faster_whisper). Su build frozen torch carica le sue
+# DLL durante l'import: la dir va aggiunta PRIMA, non dopo.
+#
+# 1) Search path delle DLL di torch (onedir: _internal/torch/lib).
+if getattr(sys, "frozen", False):
+    _torch_lib = os.path.join(sys._MEIPASS, "torch", "lib")
+    if os.path.isdir(_torch_lib):
+        try:
+            os.add_dll_directory(_torch_lib)
+        except Exception:
+            pass
+# 2) Evita l'abort "OMP: Error #15" da runtime OpenMP duplicati (Intel libiomp5md
+#    presente sia in torch/lib sia in ctranslate2). Mitigazione standard.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 # Logging su file + (nel bundle) cattura dei print. Prima di tutto il resto.
 import paths
 import applog
 applog.setup()
 
-import torch
+# ── Import di torch tollerante ai fallimenti ───────────────────────
+# Su una macchina pulita il caricamento delle DLL native di torch può fallire
+# (WinError 1114 = init DLL fallita: VC++ redist mancante, OpenMP in conflitto,
+# DLL corrotta da UPX, CPU senza l'ISA attesa...). NON deve essere un crash con
+# traceback grezzo: prendiamo l'errore, lo logghiamo e proseguiamo in modalità
+# ridotta (cattura + OCR + ricerca testuale esatta). I modelli ML restano
+# disattivati finché torch non è disponibile.
+TORCH_AVAILABLE = True
+TORCH_IMPORT_ERROR = None
+try:
+    import torch  # noqa: F401  (forza il load anticipato per diagnosi early)
+except Exception as e:  # OSError/WinError 1114, ImportError, ecc.
+    TORCH_AVAILABLE = False
+    TORCH_IMPORT_ERROR = e
+    logging.getLogger("deja").error(
+        "torch non caricabile: modalità ridotta (no embedding/trascrizione). %r", e
+    )
 
 from PyQt6.QtWidgets import QApplication
 from db import init_db, load_settings_into_config, vacuum_db
@@ -25,14 +59,26 @@ from ui.window import DejaWindow, open_ask_screen_dialog
 from ui.tray import DejaTray
 from ui.hotkey import HotkeyListener
 
-import sys
-import os
 
-if getattr(sys, 'frozen', False):
-    base = sys._MEIPASS
-    torch_lib = os.path.join(base, 'torch', 'lib')
-    if os.path.exists(torch_lib):
-        os.add_dll_directory(torch_lib)
+def _show_torch_degraded_dialog():
+    """Avvisa l'utente (una volta) che i modelli ML non sono disponibili.
+    La cattura e la ricerca testuale funzionano comunque."""
+    try:
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.warning(
+            None,
+            "Déjà — funzioni AI non disponibili",
+            "Le funzioni di intelligenza artificiale (ricerca semantica e "
+            "trascrizione audio) non sono al momento disponibili su questo PC.\n\n"
+            "Déjà continua a funzionare: cattura schermo, OCR e ricerca testuale "
+            "restano attivi.\n\n"
+            "Spesso si risolve installando il runtime Microsoft Visual C++ "
+            "(vc_redist.x64) e riavviando.\n\n"
+            f"Dettagli salvati in:\n{paths.log_file()}",
+        )
+    except Exception:
+        pass
+
 
 def _handle_exception(exc_type, exc_value, exc_tb):
     if issubclass(exc_type, KeyboardInterrupt):
@@ -88,6 +134,10 @@ def main():
         logging.getLogger("deja").info("Onboarding non completato: uscita senza cattura.")
         return
 
+    # Se torch non è caricabile, avvisa una volta e prosegui in modalità ridotta.
+    if not TORCH_AVAILABLE:
+        _show_torch_degraded_dialog()
+
     window = DejaWindow()
     stop_event = threading.Event()
     tray = DejaTray(window, stop_event, app)
@@ -123,13 +173,24 @@ def main():
     hotkey.triggered_named.connect(_on_hotkey)
     hotkey.start()
 
+    # La cattura + OCR non dipende da torch: parte sempre.
+    threads = []
     t_capture = threading.Thread(target=capturer.run, args=(stop_event,), daemon=True)
-    t_indexer = threading.Thread(target=indexer.run, args=(stop_event,), daemon=True)
-    t_audio   = threading.Thread(target=audio.run,   args=(stop_event,), daemon=True)
-    t_capture.start(); t_indexer.start(); t_audio.start()
+    t_capture.start(); threads.append(t_capture)
+    # Indexer (embedding) e Audio (Whisper) richiedono torch/ML: avviali solo se
+    # disponibile. I loro run() degradano comunque da soli, ma evitiamo retry
+    # inutili quando sappiamo già che torch non c'è.
+    if TORCH_AVAILABLE:
+        t_indexer = threading.Thread(target=indexer.run, args=(stop_event,), daemon=True)
+        t_audio   = threading.Thread(target=audio.run,   args=(stop_event,), daemon=True)
+        t_indexer.start(); t_audio.start()
+        threads += [t_indexer, t_audio]
+    else:
+        print("[INFO] Modalità ridotta: indexer e trascrizione audio disattivati (torch non disponibile).")
     exit_code = app.exec()
     stop_event.set()
-    t_capture.join(timeout=5); t_indexer.join(timeout=5); t_audio.join(timeout=5)
+    for t in threads:
+        t.join(timeout=5)
     vacuum_db()
     sys.exit(exit_code)
 

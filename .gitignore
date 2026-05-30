@@ -16,6 +16,8 @@ deja.db-shm
 build/
 dist/
 build_log*.txt
+# Redistributable VC++ scaricato a parte per compilare l'installer (vedi deja.iss)
+vc_redist.x64.exe
 
 # ── Sito web (ha il suo .gitignore) ──
 web/node_modules/

@@ -2,7 +2,6 @@
 import time
 import logging
 import numpy as np
-from sentence_transformers import SentenceTransformer
 from db import get_conn
 from config import EMBEDDING_MODEL, INDEXER_BATCH, INDEXER_INTERVAL
 
@@ -16,6 +15,10 @@ def _load_model(retries=3):
         return True
     for attempt in range(retries):
         try:
+            # Import lazy: tira torch SOLO qui dentro. Un fallimento di load
+            # delle DLL native (WinError 1114) viene catturato e l'indexer si
+            # disattiva, senza far crashare l'app all'avvio.
+            from sentence_transformers import SentenceTransformer
             print("[Indexer] Carico modello embedding (può scaricare al primo avvio)...")
             model = SentenceTransformer(EMBEDDING_MODEL)
             print("[Indexer] Modello caricato.")

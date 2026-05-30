@@ -3,7 +3,6 @@ import time, queue, threading, logging
 import numpy as np
 import pyaudiowpatch as pyaudio
 from datetime import datetime, timezone
-from faster_whisper import WhisperModel
 from scipy import signal as _spsig
 from db import get_conn
 from config import WHISPER_MODEL, AUDIO_CHUNK_SECONDS
@@ -47,6 +46,10 @@ def _load_model(retries=3):
         return True
     for attempt in range(retries):
         try:
+            # Import lazy: faster_whisper tira ctranslate2 (e DLL native adiacenti
+            # a torch). Caricarlo SOLO qui evita un crash all'avvio se le DLL non
+            # inizializzano sulla macchina dell'utente (WinError 1114).
+            from faster_whisper import WhisperModel
             print("[Audio] Carico modello Whisper (può scaricare al primo avvio)...")
             _model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
             print("[Audio] Modello caricato.")

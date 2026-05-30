@@ -1,7 +1,6 @@
 # modules/search.py
 import re
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 from db import get_conn, vec_available, quantize_int8
 from config import EMBEDDING_MODEL, TOP_K_RESULTS, AUDIO_SEMANTIC_PENALTY, AUDIO_MIN_SCORE, SCREENSHOT_MIN_SCORE
@@ -16,8 +15,12 @@ _au_cache = {"count": -1, "ids": [], "mat": None}
 
 
 def _get_model():
+    """Carica (lazy) il modello embedding. Import di torch differito qui dentro:
+    se le DLL native non si caricano (WinError 1114) ritorna None e la ricerca
+    prosegue in modalità testuale esatta, senza crashare."""
     global _model
     if _model is None:
+        from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer(EMBEDDING_MODEL)
     return _model
 
@@ -107,9 +110,16 @@ _MIC_EMOJI = "\U0001f399️ "
 
 def query(text: str, top_k: int = None) -> list[dict]:
     k = top_k if top_k else TOP_K_RESULTS
-    model = _get_model()
     conn  = get_conn()
-    q_emb = model.encode([text], convert_to_numpy=True, normalize_embeddings=True)[0]
+
+    # Embedding per la ricerca semantica. Se il modello (torch) non è disponibile
+    # degradiamo alla sola ricerca testuale esatta invece di crashare.
+    q_emb = None
+    try:
+        model = _get_model()
+        q_emb = model.encode([text], convert_to_numpy=True, normalize_embeddings=True)[0]
+    except Exception as e:
+        print(f"[search] modello non disponibile, solo ricerca esatta: {e}")
 
     screenshots = {}
     audio       = {}
@@ -127,8 +137,9 @@ def query(text: str, top_k: int = None) -> list[dict]:
             }
 
     # ── 2. SEMANTIC screenshot (sqlite-vec se disponibile) ────────
+    # Saltato del tutto se il modello non è disponibile (q_emb None).
     sem_cap = max(k * 3, 30)
-    use_vec = vec_available()
+    use_vec = vec_available() and q_emb is not None
     if use_vec:
         try:
             q_i8 = quantize_int8(q_emb).tobytes()
@@ -151,8 +162,8 @@ def query(text: str, top_k: int = None) -> list[dict]:
                     "text": row[1], "app": row[2] or "Sconosciuta",
                     "type": "screenshot", "exact": False
                 }
-    else:
-        # Fallback numpy
+    elif q_emb is not None:
+        # Fallback numpy (solo se abbiamo l'embedding della query)
         ss_ids, ss_mat = _load_screenshot_embeddings(conn)
         if ss_mat is not None:
             sims       = ss_mat @ q_emb
@@ -221,7 +232,7 @@ def query(text: str, top_k: int = None) -> list[dict]:
                     "app": _MIC_EMOJI + ("Microfono" if row[1] == "mic" else "Sistema"),
                     "text": row[2]
                 }
-    else:
+    elif q_emb is not None:
         au_ids, au_mat = _load_audio_embeddings(conn)
         if au_mat is not None:
             sims       = au_mat @ q_emb
