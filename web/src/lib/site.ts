@@ -16,4 +16,4 @@ export const INSTALLER_NAME =
   process.env.NEXT_PUBLIC_INSTALLER_NAME || `Deja-Setup-${APP_VERSION}.exe`;
 
 // Dimensione indicativa dell'installer (lzma2/max su onedir torch + modelli).
-export const INSTALLER_SIZE = process.env.NEXT_PUBLIC_INSTALLER_SIZE || "~240 MB";
+export const INSTALLER_SIZE = process.env.NEXT_PUBLIC_INSTALLER_SIZE || "~265 MB";
