@@ -181,7 +181,8 @@ def get_vision_config():
 
 def vision_is_configured():
     cfg = get_vision_config()
-    return cfg["enabled"] and bool(cfg["api_key"])
+    # Abilitato + (key presente OPPURE endpoint locale, che non richiede key).
+    return cfg["enabled"] and (bool(cfg["api_key"]) or ai_assistant.is_local_endpoint(cfg["base_url"]))
 
 
 def _vision_client():
@@ -191,9 +192,12 @@ def _vision_client():
     except ImportError as e:
         raise RuntimeError("openai SDK non installato. Esegui: pip install openai") from e
     cfg = get_vision_config()
-    if not cfg["api_key"]:
-        raise RuntimeError("Vision API key mancante. Configura in Impostazioni → AI → Vision.")
     key = cfg["api_key"]
+    if not key:
+        if ai_assistant.is_local_endpoint(cfg["base_url"]):
+            key = "local"  # endpoint vision locale (es. llava su Ollama): chiave fittizia
+        else:
+            raise RuntimeError("Vision API key mancante. Configura in Impostazioni → AI → Vision.")
     try:
         print(f"[AskScreen] vision client url={cfg['base_url']} model={cfg['model']} "
               f"key={key[:6]}...{key[-4:]} (len={len(key)})")

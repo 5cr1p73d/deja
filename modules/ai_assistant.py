@@ -38,8 +38,17 @@ def get_ai_config():
         "inline":    _get_setting("ai_inline_rag", "0") == "1",
     }
 
+def is_local_endpoint(url: str) -> bool:
+    """True se l'endpoint punta a un server locale (Ollama, LM Studio, llama.cpp…).
+    Gli endpoint locali OpenAI-compatibili non richiedono API key."""
+    u = (url or "").lower()
+    return (any(h in u for h in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]", "://::1"))
+            or ".local" in u)
+
 def is_configured():
-    return bool(_get_setting("ai_api_key", "").strip())
+    cfg = get_ai_config()
+    # Configurato se c'è una key, oppure se l'endpoint è locale (key non necessaria).
+    return bool(cfg["api_key"]) or is_local_endpoint(cfg["base_url"])
 
 # ── Chat persistence ──────────────────────────────────────────────
 def save_chat_message(role, content, conversation_id=1):
@@ -144,6 +153,44 @@ def list_daily_summaries():
     conn.close()
     return [{"day_iso": r[0], "ts_generated": r[1], "preview": r[2]} for r in rows]
 
+def list_models(base_url=None, api_key=None):
+    """Interroga l'endpoint OpenAI-compatibile per i modelli disponibili.
+
+    Usa GET /models (client.models.list()). Funziona con qualsiasi provider
+    OpenAI-compatibile (Gonkagate, OpenRouter, OpenAI, Gemini openai-compat, ecc.).
+    Se base_url/api_key non passati, usa quelli salvati in config AI.
+
+    Ritorna (ok: bool, list[str] di model id  |  str messaggio errore).
+    """
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return False, "openai SDK non installato"
+    cfg = get_ai_config()
+    base = (base_url if base_url is not None else cfg["base_url"]).strip() or AI_BASE_URL_DEFAULT
+    key  = (api_key  if api_key  is not None else cfg["api_key"]).strip()
+    if not key:
+        if is_local_endpoint(base):
+            key = "local"  # endpoint locale: chiave non richiesta
+        else:
+            return False, "API key mancante"
+    try:
+        client = OpenAI(base_url=base, api_key=key)
+        resp = client.models.list()
+        ids = []
+        for m in getattr(resp, "data", []) or []:
+            mid = getattr(m, "id", None) or (m.get("id") if isinstance(m, dict) else None)
+            if not mid:
+                continue
+            # Gemini openai-compat ritorna "models/gemini-..." → normalizza
+            if mid.startswith("models/"):
+                mid = mid[len("models/"):]
+            ids.append(mid)
+        ids = sorted(set(ids))
+        return (True, ids) if ids else (False, "Nessun modello restituito dall'endpoint")
+    except Exception as e:
+        return False, str(e)[:200]
+
 def test_connection():
     """Quick API ping. Returns (ok: bool, message: str)."""
     try:
@@ -167,9 +214,12 @@ def _client():
     except ImportError as e:
         raise RuntimeError("openai SDK non installato. Esegui: pip install openai") from e
     cfg = get_ai_config()
-    if not cfg["api_key"]:
-        raise RuntimeError("API key mancante. Configura in Impostazioni → AI.")
     key = cfg["api_key"]
+    if not key:
+        if is_local_endpoint(cfg["base_url"]):
+            key = "local"  # endpoint locale: chiave fittizia (l'SDK la esige non vuota)
+        else:
+            raise RuntimeError("API key mancante. Configura in Impostazioni → AI.")
     try:
         print(f"[AI] client url={cfg['base_url']} model={cfg['model']} key={key[:6]}...{key[-4:]} (len={len(key)})")
     except Exception:
