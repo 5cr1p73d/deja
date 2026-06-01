@@ -387,36 +387,88 @@ def _close_streams(streams, pa):
     except Exception: pass
 
 
+def _audio_enabled() -> bool:
+    """Toggle utente: cattura audio disattivabile da Impostazioni → Cattura."""
+    return (get_setting("capture_audio_enabled") or "1") == "1"
+
+def _has_audio_devices() -> bool:
+    return bool(get_setting("audio_mic_index") or get_setting("audio_out_index"))
+
 def run(stop_event):
-    mic_idx_str = get_setting("audio_mic_index")
-    out_idx_str = get_setting("audio_out_index")
-    if not mic_idx_str and not out_idx_str:
-        print("[Audio] Nessun dispositivo configurato. Modulo disabilitato."); return
-    if not _load_model():
-        print("[Audio] Modello vocale non disponibile: trascrizione audio disattivata.")
-        _log.warning("Audio disattivato: Whisper non caricato.")
-        return
-
+    """Loop audio resiliente a: device assenti, toggle on/off da impostazioni,
+    hot-swap device, e stream morti (watchdog). Gli stream restano aperti SOLO
+    quando la cattura audio è abilitata e c'è almeno un device configurato.
+    Il modello Whisper viene caricato pigramente alla prima attivazione."""
     chunk_secs = AUDIO_CHUNK_SECONDS
-    pa = pyaudio.PyAudio()
-    streams, proc_threads = _setup_streams(pa, stop_event, chunk_secs)
-    if not streams:
-        print("[Audio] Nessuno stream aperto."); pa.terminate(); return
-    for _src, s in streams: s.start_stream()
-    for t in proc_threads: t.start()
-    print("[Audio] Registrazione avviata.")
-
+    pa = None
+    streams, proc_threads = [], []
+    model_loaded = False
     last_watchdog_check = time.time()
+    print("[Audio] Avviato.")
+
+    def _open():
+        nonlocal pa, streams, proc_threads, model_loaded
+        if not _audio_enabled():
+            print("[Audio] Cattura audio disattivata da impostazioni."); return False
+        if not _has_audio_devices():
+            print("[Audio] Nessun dispositivo configurato."); return False
+        if not model_loaded:
+            if not _load_model():
+                print("[Audio] Modello vocale non disponibile: trascrizione disattivata.")
+                _log.warning("Audio disattivato: Whisper non caricato.")
+                return False
+            model_loaded = True
+        try:
+            pa = pyaudio.PyAudio()
+        except Exception as e:
+            print(f"[Audio] PyAudio init fail: {e}"); pa = None; return False
+        streams, proc_threads = _setup_streams(pa, stop_event, chunk_secs)
+        if not streams:
+            print("[Audio] Nessuno stream aperto."); _close(); return False
+        for _src, s in streams: s.start_stream()
+        for t in proc_threads: t.start()
+        print("[Audio] Registrazione avviata.")
+        return True
+
+    def _close():
+        nonlocal pa, streams, proc_threads
+        if pa is not None:
+            _close_streams(streams, pa)
+        streams, proc_threads = [], []
+        pa = None
+
+    # Apertura iniziale (no-op se disabilitata o senza device: si riproverà nel loop).
+    _open()
+
     while not stop_event.is_set():
         try:
             stop_event.wait(timeout=2.0)
             if stop_event.is_set(): break
 
-            # Hot-swap request (settings UI cambiato device)
+            enabled = _audio_enabled()
+            active = bool(streams)
+
+            # Toggle OFF → chiudi gli stream e resta in idle finché riattivato.
+            if active and not enabled:
+                print("[Audio] Cattura audio disattivata: chiudo gli stream.")
+                _close()
+                _restart_event.clear()
+                continue
+            # Toggle OFF e già chiuso → nulla da fare.
+            if not enabled:
+                continue
+
+            # Hot-swap request (settings UI: device o toggle cambiati).
             force_restart = _restart_event.is_set()
             if force_restart:
                 _restart_event.clear()
                 print("[Audio] Hot-swap request: ricarico device da settings…")
+
+            # Abilitato ma nessuno stream aperto (riattivato, o device aggiunto).
+            if not active:
+                _open()
+                last_watchdog_check = time.time()
+                continue
 
             now = time.time()
             dead_sources = []
@@ -429,27 +481,14 @@ def run(stop_event):
             if dead_sources or force_restart:
                 reason = ("hot-swap" if force_restart else f"morti {dead_sources}")
                 print(f"[Audio] Restart ({reason})…")
-                _close_streams(streams, pa)
+                _close()
                 time.sleep(0.5)
-                try: pa = pyaudio.PyAudio()
-                except Exception as e:
-                    print(f"[Audio] PyAudio init fail: {e}"); break
-                streams, proc_threads = _setup_streams(pa, stop_event, chunk_secs)
-                if not streams:
-                    print("[Audio] Nessuno stream riaperto (config vuota?). Sleeping…")
-                    # Aspetta nuovo restart request (es. user aggiunge device)
-                    while not stop_event.is_set() and not _restart_event.is_set():
-                        stop_event.wait(timeout=5.0)
-                    _restart_event.clear()
-                    continue
-                for _src, s in streams: s.start_stream()
-                for t in proc_threads: t.start()
-                print("[Audio] Capture riavviato.")
+                _open()
                 last_watchdog_check = time.time()
         except Exception as e:
             _log.exception("Errore nel ciclo audio")
             print(f"[Audio] Errore ciclo (continuo): {e}")
             stop_event.wait(timeout=2.0)
 
-    _close_streams(streams, pa)
+    _close()
     print("[Audio] Fermato.")

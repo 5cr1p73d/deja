@@ -73,6 +73,10 @@ def run(stop_event):
     while not stop_event.is_set():
         start = time.time()
         try:
+            # Toggle utente: cattura screenshot disattivabile da Impostazioni → Cattura.
+            # Letta a ogni ciclo così il cambio è immediato senza riavvio.
+            if (get_setting("capture_screenshots_enabled", "1") or "1") != "1":
+                stop_event.wait(timeout=2); continue
             # Privacy gates
             if privacy.is_paused():
                 stop_event.wait(timeout=2); continue
