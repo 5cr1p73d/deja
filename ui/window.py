@@ -311,68 +311,125 @@ def _md_to_html(text):
 
 
 # ── Settings Dialog ───────────────────────────────────────────────
+# Foglio di stile coeso e sobrio: un solo accento (lavanda), superfici tenui,
+# tipografia con gerarchia chiara. Classi via objectName: #section (titoletti),
+# #caption (note), #chip (bottoncini preset), #accent (azioni), #save_btn (primario).
+SETTINGS_QSS = """
+    QDialog { background:#17171c; }
+    QLabel  { color:#e7e7ec; background:transparent; font-size:12px; }
+    QLabel#section {
+        color:#9a9aa6; font-size:10px; font-weight:700; letter-spacing:1.6px;
+    }
+    QLabel#caption { color:#82828e; font-size:11px; }
+    QLabel#field   { color:#b9b9c4; font-size:12px; font-weight:600; }
+
+    QLineEdit, QSpinBox, QComboBox {
+        background:rgba(255,255,255,0.035); color:#e7e7ec;
+        border:1px solid rgba(255,255,255,0.085); border-radius:9px;
+        padding:9px 12px; font-size:12px;
+        selection-background-color:rgba(167,139,250,0.35); selection-color:#fff;
+    }
+    QLineEdit:hover, QComboBox:hover, QSpinBox:hover {
+        border:1px solid rgba(255,255,255,0.16);
+    }
+    QLineEdit:focus, QSpinBox:focus, QComboBox:focus, QComboBox:on {
+        border:1px solid rgba(167,139,250,0.55); background:rgba(255,255,255,0.06);
+    }
+    QComboBox::drop-down {
+        subcontrol-origin:padding; subcontrol-position:center right;
+        width:26px; border:none;
+    }
+    QComboBox::down-arrow {
+        width:0; height:0; margin-right:9px;
+        border-left:5px solid transparent; border-right:5px solid transparent;
+        border-top:6px solid #9a9aa6;
+    }
+    QComboBox::down-arrow:on { border-top:none; border-bottom:6px solid #bcabff; }
+    QComboBox QAbstractItemView {
+        background:#1e1e26; color:#e7e7ec; border:1px solid rgba(255,255,255,0.10);
+        border-radius:8px; padding:4px; outline:none;
+        selection-background-color:rgba(167,139,250,0.22);
+    }
+
+    QTabWidget::pane { border:none; background:transparent; }
+    QTabBar { qproperty-drawBase:0; }
+    QTabBar::tab {
+        background:transparent; color:#82828e; padding:11px 22px;
+        font-size:12px; font-weight:600; border:none; border-bottom:2px solid transparent;
+    }
+    QTabBar::tab:hover { color:#c7c7d0; }
+    QTabBar::tab:selected { color:#f4f4f7; border-bottom:2px solid #a78bfa; }
+
+    QCheckBox { color:#e7e7ec; background:transparent; spacing:10px; font-size:12px; }
+    QCheckBox::indicator {
+        width:18px; height:18px; border-radius:5px;
+        background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.22);
+    }
+    QCheckBox::indicator:hover { border:1px solid rgba(167,139,250,0.55); }
+    QCheckBox::indicator:checked { background:#a78bfa; border:1px solid #a78bfa; }
+
+    QPushButton {
+        background:rgba(255,255,255,0.05); color:#d6d6dd;
+        border:1px solid rgba(255,255,255,0.10); border-radius:9px;
+        font-size:12px; font-weight:600; padding:9px 20px;
+    }
+    QPushButton:hover { background:rgba(255,255,255,0.10); color:#fff; }
+    QPushButton:disabled { color:#56565f; background:rgba(255,255,255,0.025); }
+
+    QPushButton#chip {
+        background:rgba(255,255,255,0.04); color:#a6a6b2;
+        border:1px solid rgba(255,255,255,0.09); border-radius:8px;
+        font-size:11px; font-weight:600; padding:6px 13px;
+    }
+    QPushButton#chip:hover { background:rgba(255,255,255,0.09); color:#ededf1; }
+
+    QPushButton#accent {
+        background:rgba(167,139,250,0.12); color:#bcabff;
+        border:1px solid rgba(167,139,250,0.30); border-radius:9px;
+        font-size:11px; font-weight:600; padding:8px 16px;
+    }
+    QPushButton#accent:hover { background:rgba(167,139,250,0.20); color:#cdbfff; }
+    QPushButton#accent:disabled {
+        color:#56565f; background:rgba(255,255,255,0.025); border-color:rgba(255,255,255,0.07);
+    }
+
+    QPushButton#save_btn {
+        background:#a78bfa; color:#1a1430; border:1px solid #a78bfa; font-weight:700;
+    }
+    QPushButton#save_btn:hover { background:#b9a4ff; border-color:#b9a4ff; }
+"""
+
+
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Impostazioni — Déjà")
-        self.setFixedSize(620, 640)
-        self.setStyleSheet(f"""
-            QDialog {{ background:#0e0e12; border-radius:14px; }}
-            QLabel {{ color:#f3f4f6; background:transparent; }}
-            QLineEdit, QSpinBox, QComboBox {{
-                background:rgba(255,255,255,0.05); color:#f3f4f6;
-                border:1px solid rgba(255,255,255,0.10); border-radius:7px;
-                padding:6px 10px; font-size:12px;
-            }}
-            QTabWidget::pane {{ border:none; background:transparent; }}
-            QTabBar::tab {{
-                background:transparent; color:#8b8d98; padding:8px 18px;
-                font-size:12px; font-weight:500; border-bottom:2px solid transparent;
-            }}
-            QTabBar::tab:selected {{ color:#ffffff; border-bottom:2px solid #a78bfa; }}
-            QCheckBox {{ color:#f3f4f6; background:transparent; spacing:8px; font-size:12px; }}
-            QCheckBox::indicator {{
-                width:16px; height:16px; border-radius:4px;
-                background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.18);
-            }}
-            QCheckBox::indicator:checked {{
-                background:rgba(167,139,250,0.6); border:1px solid #a78bfa;
-            }}
-            QComboBox QAbstractItemView {{
-                background:#1a1a1f; color:#f3f4f6; border:1px solid rgba(255,255,255,0.10);
-                selection-background-color:rgba(167,139,250,0.25); outline:none;
-            }}
-            QPushButton {{
-                background:rgba(255,255,255,0.07); color:#f3f4f6;
-                border:1px solid rgba(255,255,255,0.12); border-radius:8px;
-                font-size:12px; font-weight:600; padding:8px 20px;
-            }}
-            QPushButton:hover {{ background:rgba(255,255,255,0.14); }}
-            QPushButton#save_btn {{
-                background:rgba(16,185,129,0.15); color:#10b981;
-                border:1px solid rgba(16,185,129,0.4);
-            }}
-            QPushButton#save_btn:hover {{ background:rgba(16,185,129,0.28); }}
-        """)
+        self.setFixedSize(660, 720)
+        # L'overlay di Déjà è WindowStaysOnTopHint|Tool: senza questo flag la finestra
+        # impostazioni resta DIETRO l'overlay, il modal blocca l'input e sembra tutto
+        # bloccato. Tenerla sopra (e portarla in primo piano in showEvent) risolve.
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setStyleSheet(SETTINGS_QSS)
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
         tabs = QTabWidget(); root.addWidget(tabs, stretch=1)
 
         # ── Tab Ricerca ─────────────────────────────────────────
         t_search = QWidget(); t_search.setStyleSheet("background:transparent;")
-        tsl = QVBoxLayout(t_search); tsl.setContentsMargins(24, 20, 24, 20); tsl.setSpacing(14)
+        tsl = QVBoxLayout(t_search); tsl.setContentsMargins(24, 22, 24, 20); tsl.setSpacing(14)
+        srch_sec = QLabel("MODELLI"); srch_sec.setObjectName("section"); tsl.addWidget(srch_sec)
         for label, attr, placeholder in [
             ("Modello Embedding", "EMBEDDING_MODEL", "es. paraphrase-multilingual-mpnet-base-v2"),
             ("Modello Whisper",   "WHISPER_MODEL",   "tiny / base / small / medium"),
         ]:
             row = QHBoxLayout(); row.setSpacing(12)
-            lbl = QLabel(label); lbl.setFixedWidth(160); lbl.setFont(QFont("Segoe UI", 11))
+            lbl = QLabel(label); lbl.setObjectName("field"); lbl.setFixedWidth(160)
             inp = QLineEdit(); inp.setPlaceholderText(placeholder)
             if _cfg: inp.setText(str(getattr(_cfg, attr, "")))
             inp.setObjectName(attr)
             row.addWidget(lbl); row.addWidget(inp); tsl.addLayout(row)
 
         row2 = QHBoxLayout(); row2.setSpacing(12)
-        lbl2 = QLabel("Soglia audio (0–1)"); lbl2.setFixedWidth(160); lbl2.setFont(QFont("Segoe UI", 11))
+        lbl2 = QLabel("Soglia audio"); lbl2.setObjectName("field"); lbl2.setFixedWidth(160)
         self._score_spin = QSpinBox()
         self._score_spin.setRange(1, 99); self._score_spin.setSuffix("%")
         try:
@@ -385,17 +442,35 @@ class SettingsDialog(QDialog):
 
         # ── Tab Cattura ─────────────────────────────────────────
         t_cap = QWidget(); t_cap.setStyleSheet("background:transparent;")
-        tcl = QVBoxLayout(t_cap); tcl.setContentsMargins(24, 20, 24, 20); tcl.setSpacing(14)
+        tcl = QVBoxLayout(t_cap); tcl.setContentsMargins(24, 22, 24, 20); tcl.setSpacing(14)
+        cap_sec = QLabel("INTERVALLI"); cap_sec.setObjectName("section"); tcl.addWidget(cap_sec)
         for label, attr, placeholder in [
             ("Intervallo screenshot (s)", "CAPTURE_INTERVAL", "es. 5"),
             ("Chunk audio (s)",           "AUDIO_CHUNK_SECONDS", "es. 30"),
         ]:
             row = QHBoxLayout(); row.setSpacing(12)
-            lbl = QLabel(label); lbl.setFixedWidth(180); lbl.setFont(QFont("Segoe UI", 11))
+            lbl = QLabel(label); lbl.setObjectName("field"); lbl.setFixedWidth(180)
             inp = QLineEdit(); inp.setPlaceholderText(placeholder)
             if _cfg: inp.setText(str(getattr(_cfg, attr, "")))
             inp.setObjectName(attr)
             row.addWidget(lbl); row.addWidget(inp); tcl.addLayout(row)
+
+        # ── Toggle cattura (screenshot / audio) ─────────────────
+        from PyQt6.QtWidgets import QCheckBox as _QCheckBox
+        from db import get_setting as _get_setting
+        tcl.addSpacing(6)
+        cap_sec2 = QLabel("REGISTRAZIONE"); cap_sec2.setObjectName("section"); tcl.addWidget(cap_sec2)
+        self._cap_screens = _QCheckBox("Cattura gli screenshot dello schermo")
+        self._cap_screens.setChecked((_get_setting("capture_screenshots_enabled", "1") or "1") == "1")
+        tcl.addWidget(self._cap_screens)
+        self._cap_audio = _QCheckBox("Registra e trascrivi l'audio (microfono e sistema)")
+        self._cap_audio.setChecked((_get_setting("capture_audio_enabled", "1") or "1") == "1")
+        tcl.addWidget(self._cap_audio)
+        cap_hint = QLabel(
+            "Puoi spegnere la registrazione senza chiudere l'app: il cambiamento è immediato."
+        )
+        cap_hint.setObjectName("caption"); cap_hint.setWordWrap(True); tcl.addWidget(cap_hint)
+
         tcl.addStretch(); tabs.addTab(t_cap, "Cattura")
 
         # ── Tab AI ──────────────────────────────────────────────
@@ -405,26 +480,40 @@ class SettingsDialog(QDialog):
         # carica valori correnti dal DB
         ai_cfg = ai_assistant.get_ai_config()
 
+        ai_sec = QLabel("ASSISTENTE · CHAT"); ai_sec.setObjectName("section")
+        tail.addWidget(ai_sec)
+
         row_key = QHBoxLayout(); row_key.setSpacing(12)
-        lbl_key = QLabel("API Key"); lbl_key.setFixedWidth(110); lbl_key.setFont(QFont("Segoe UI", 11))
+        lbl_key = QLabel("API Key"); lbl_key.setObjectName("field"); lbl_key.setFixedWidth(110)
         self._ai_key = QLineEdit(); self._ai_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._ai_key.setPlaceholderText("Incolla qui la tua API key")
+        self._ai_key.setPlaceholderText("Lascia vuoto se usi un modello locale")
         self._ai_key.setText(ai_cfg.get("api_key", ""))
         row_key.addWidget(lbl_key); row_key.addWidget(self._ai_key); tail.addLayout(row_key)
 
         row_url = QHBoxLayout(); row_url.setSpacing(12)
-        lbl_url = QLabel("Base URL"); lbl_url.setFixedWidth(110); lbl_url.setFont(QFont("Segoe UI", 11))
+        lbl_url = QLabel("Base URL"); lbl_url.setObjectName("field"); lbl_url.setFixedWidth(110)
         self._ai_url = QLineEdit()
-        self._ai_url.setPlaceholderText(getattr(_cfg, "AI_BASE_URL_DEFAULT", "https://api.gonkagate.com/v1"))
+        self._ai_url.setPlaceholderText("es. http://localhost:11434/v1  oppure  https://tuo-provider/v1")
         url_val = ai_cfg.get("base_url", "")
         default_url = getattr(_cfg, "AI_BASE_URL_DEFAULT", "")
         if url_val and url_val != default_url:
             self._ai_url.setText(url_val)
         row_url.addWidget(lbl_url); row_url.addWidget(self._ai_url); tail.addLayout(row_url)
+        tail.addLayout(self._build_preset_row(self._ai_url, [
+            ("Ollama", "http://localhost:11434/v1"),
+            ("LM Studio", "http://localhost:1234/v1"),
+        ]))
+        local_hint = QLabel(
+            "Funziona con qualsiasi endpoint OpenAI-compatibile, locale o cloud. "
+            "In locale avvia Ollama o LM Studio, scegli il preset e premi Rileva: "
+            "l'API Key non serve. I modelli consigliati sono nel README."
+        )
+        local_hint.setObjectName("caption"); local_hint.setWordWrap(True); tail.addWidget(local_hint)
 
         row_model = QHBoxLayout(); row_model.setSpacing(12)
-        lbl_model = QLabel("Modello"); lbl_model.setFixedWidth(110); lbl_model.setFont(QFont("Segoe UI", 11))
+        lbl_model = QLabel("Modello"); lbl_model.setObjectName("field"); lbl_model.setFixedWidth(110)
         self._ai_model = QComboBox()
+        self._ai_model.setEditable(True)  # qualsiasi modello, anche non in lista
         models = getattr(_cfg, "AI_MODELS", ["Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"])
         for m in models:
             self._ai_model.addItem(m)
@@ -432,7 +521,14 @@ class SettingsDialog(QDialog):
         idx_match = self._ai_model.findText(cur_model)
         if idx_match >= 0:
             self._ai_model.setCurrentIndex(idx_match)
-        row_model.addWidget(lbl_model); row_model.addWidget(self._ai_model); tail.addLayout(row_model)
+        else:
+            self._ai_model.setCurrentText(cur_model)
+        self._ai_detect_btn = QPushButton("Rileva"); self._ai_detect_btn.setObjectName("accent")
+        self._ai_detect_btn.setFixedHeight(38); self._ai_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._ai_detect_btn.setToolTip("Rileva i modelli disponibili sull'endpoint (richiede Base URL, e API Key se cloud)")
+        self._ai_detect_btn.clicked.connect(self._detect_ai_models)
+        row_model.addWidget(lbl_model); row_model.addWidget(self._ai_model, stretch=1)
+        row_model.addWidget(self._ai_detect_btn); tail.addLayout(row_model)
 
         from PyQt6.QtWidgets import QCheckBox
         self._ai_inline = QCheckBox("Mostra risposta AI sopra i risultati di ricerca")
@@ -440,22 +536,15 @@ class SettingsDialog(QDialog):
         tail.addWidget(self._ai_inline)
 
         hint = QLabel(
-            "💡 La chat AI usa tool-calling per cercare nei tuoi ricordi.\n"
-            "Ti basta scriverle: capirà da sola cosa cercare."
+            "La chat cerca da sola nei tuoi ricordi mentre le scrivi: chiedile pure "
+            "in linguaggio naturale, capirà cosa cercare."
         )
-        hint.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; font-size:11px;")
-        hint.setWordWrap(True)
+        hint.setObjectName("caption"); hint.setWordWrap(True)
         tail.addWidget(hint)
 
         test_row = QHBoxLayout(); test_row.setSpacing(10)
-        self._ai_test_btn = QPushButton("🔌 Test connessione")
-        self._ai_test_btn.setFixedHeight(32); self._ai_test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._ai_test_btn.setStyleSheet(
-            f"QPushButton{{background:rgba(167,139,250,0.10); color:{C_AI_HEX}; "
-            f"border:1px solid rgba(167,139,250,0.30); border-radius:8px; font-size:11px; font-weight:600; padding:6px 16px;}}"
-            "QPushButton:hover{background:rgba(167,139,250,0.22);}"
-            "QPushButton:disabled{color:#5a5d6a; background:rgba(255,255,255,0.03);}"
-        )
+        self._ai_test_btn = QPushButton("Prova connessione"); self._ai_test_btn.setObjectName("accent")
+        self._ai_test_btn.setFixedHeight(34); self._ai_test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._ai_test_btn.clicked.connect(self._test_ai_connection)
         test_row.addWidget(self._ai_test_btn)
 
@@ -468,12 +557,10 @@ class SettingsDialog(QDialog):
 
         # ── Sub-section: Vision (Ask Screen) ────────────────────
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("background:rgba(255,255,255,0.08); max-height:1px; min-height:1px; border:none;")
-        tail.addWidget(sep)
+        sep.setStyleSheet("background:rgba(255,255,255,0.07); max-height:1px; min-height:1px; border:none;")
+        tail.addSpacing(4); tail.addWidget(sep); tail.addSpacing(4)
 
-        vis_title = QLabel("👁  Vision — Ask Screen")
-        vis_title.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
-        vis_title.setStyleSheet(f"color:{C_AI_HEX}; background:transparent; letter-spacing:0.5px;")
+        vis_title = QLabel("VISION · CHIEDI ALLO SCHERMO"); vis_title.setObjectName("section")
         tail.addWidget(vis_title)
 
         try:
@@ -482,30 +569,35 @@ class SettingsDialog(QDialog):
         except Exception:
             vis_cfg = {"enabled": False, "base_url": "", "api_key": "", "model": ""}
 
-        self._vis_enabled = QCheckBox("Usa Vision API per 'Chiedi allo schermo' (invia immagine, non solo OCR)")
+        self._vis_enabled = QCheckBox("Manda l'immagine dello schermo al modello (non solo il testo OCR)")
         self._vis_enabled.setChecked(vis_cfg.get("enabled", False))
         tail.addWidget(self._vis_enabled)
 
         row_vkey = QHBoxLayout(); row_vkey.setSpacing(12)
-        lbl_vkey = QLabel("API Key"); lbl_vkey.setFixedWidth(110); lbl_vkey.setFont(QFont("Segoe UI", 11))
+        lbl_vkey = QLabel("API Key"); lbl_vkey.setObjectName("field"); lbl_vkey.setFixedWidth(110)
         self._vis_key = QLineEdit(); self._vis_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._vis_key.setPlaceholderText("Gemini API key (gratis su aistudio.google.com)")
+        self._vis_key.setPlaceholderText("API key del provider (vuoto se locale)")
         self._vis_key.setText(vis_cfg.get("api_key", ""))
         row_vkey.addWidget(lbl_vkey); row_vkey.addWidget(self._vis_key); tail.addLayout(row_vkey)
 
         row_vurl = QHBoxLayout(); row_vurl.setSpacing(12)
-        lbl_vurl = QLabel("Base URL"); lbl_vurl.setFixedWidth(110); lbl_vurl.setFont(QFont("Segoe UI", 11))
+        lbl_vurl = QLabel("Base URL"); lbl_vurl.setObjectName("field"); lbl_vurl.setFixedWidth(110)
         self._vis_url = QLineEdit()
         default_vurl = getattr(_cfg, "AI_VISION_BASE_URL_DEFAULT", "")
-        self._vis_url.setPlaceholderText(default_vurl)
+        self._vis_url.setPlaceholderText("es. http://localhost:11434/v1  oppure  https://tuo-provider/v1")
         vurl_val = vis_cfg.get("base_url", "")
         if vurl_val and vurl_val != default_vurl:
             self._vis_url.setText(vurl_val)
         row_vurl.addWidget(lbl_vurl); row_vurl.addWidget(self._vis_url); tail.addLayout(row_vurl)
+        tail.addLayout(self._build_preset_row(self._vis_url, [
+            ("Ollama", "http://localhost:11434/v1"),
+            ("LM Studio", "http://localhost:1234/v1"),
+        ]))
 
         row_vmodel = QHBoxLayout(); row_vmodel.setSpacing(12)
-        lbl_vmodel = QLabel("Modello"); lbl_vmodel.setFixedWidth(110); lbl_vmodel.setFont(QFont("Segoe UI", 11))
+        lbl_vmodel = QLabel("Modello"); lbl_vmodel.setObjectName("field"); lbl_vmodel.setFixedWidth(110)
         self._vis_model = QComboBox()
+        self._vis_model.setEditable(True)  # qualsiasi modello vision, anche non in lista
         vmodels = getattr(_cfg, "AI_VISION_MODELS", ["gemini-2.0-flash-exp"])
         for m in vmodels:
             self._vis_model.addItem(m)
@@ -513,27 +605,28 @@ class SettingsDialog(QDialog):
         idx_vm = self._vis_model.findText(cur_vmodel)
         if idx_vm >= 0:
             self._vis_model.setCurrentIndex(idx_vm)
-        row_vmodel.addWidget(lbl_vmodel); row_vmodel.addWidget(self._vis_model); tail.addLayout(row_vmodel)
+        else:
+            self._vis_model.setCurrentText(cur_vmodel)
+        self._vis_detect_btn = QPushButton("Rileva"); self._vis_detect_btn.setObjectName("accent")
+        self._vis_detect_btn.setFixedHeight(38); self._vis_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._vis_detect_btn.setToolTip("Rileva i modelli vision disponibili sull'endpoint")
+        self._vis_detect_btn.clicked.connect(self._detect_vision_models)
+        row_vmodel.addWidget(lbl_vmodel); row_vmodel.addWidget(self._vis_model, stretch=1)
+        row_vmodel.addWidget(self._vis_detect_btn); tail.addLayout(row_vmodel)
 
         vis_hint = QLabel(
-            "💡 Gemini free: 1500 richieste/giorno, 15/min. Account Google su "
-            "<a href='https://aistudio.google.com/apikey' style='color:#a78bfa;'>aistudio.google.com/apikey</a>.<br>"
-            "⚠ Privacy: l'immagine dello schermo esce dal PC verso Google."
+            "Richiede un modello multimodale su endpoint OpenAI-compatibile. "
+            "In locale (es. llava o llama3.2-vision su Ollama) l'immagine non lascia il PC e "
+            "l'API Key non serve; con un provider cloud l'immagine viene inviata online. "
+            "I modelli consigliati sono nel README."
         )
-        vis_hint.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; font-size:10px;")
-        vis_hint.setWordWrap(True)
+        vis_hint.setObjectName("caption"); vis_hint.setWordWrap(True)
         vis_hint.setOpenExternalLinks(True)
         tail.addWidget(vis_hint)
 
         vtest_row = QHBoxLayout(); vtest_row.setSpacing(10)
-        self._vis_test_btn = QPushButton("🔌 Test Vision")
-        self._vis_test_btn.setFixedHeight(30); self._vis_test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._vis_test_btn.setStyleSheet(
-            f"QPushButton{{background:rgba(167,139,250,0.10); color:{C_AI_HEX}; "
-            f"border:1px solid rgba(167,139,250,0.30); border-radius:8px; font-size:11px; font-weight:600; padding:5px 14px;}}"
-            "QPushButton:hover{background:rgba(167,139,250,0.22);}"
-            "QPushButton:disabled{color:#5a5d6a; background:rgba(255,255,255,0.03);}"
-        )
+        self._vis_test_btn = QPushButton("Prova Vision"); self._vis_test_btn.setObjectName("accent")
+        self._vis_test_btn.setFixedHeight(34); self._vis_test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._vis_test_btn.clicked.connect(self._test_vision_connection)
         vtest_row.addWidget(self._vis_test_btn)
 
@@ -544,34 +637,104 @@ class SettingsDialog(QDialog):
         vtest_row.addWidget(self._vis_test_status, stretch=1)
         tail.addLayout(vtest_row)
 
-        tail.addStretch(); tabs.addTab(t_ai, "AI")
+        tail.addStretch()
+        # Il tab AI ha molti campi (chat + vision): scroll area così nulla viene tagliato.
+        ai_scroll = QScrollArea(); ai_scroll.setWidgetResizable(True)
+        ai_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        ai_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        ai_scroll.setStyleSheet(
+            "QScrollArea{background:transparent; border:none;}"
+            "QScrollBar:vertical{background:transparent; width:8px; margin:2px;}"
+            "QScrollBar::handle:vertical{background:rgba(255,255,255,0.18); border-radius:4px; min-height:30px;}"
+            "QScrollBar::handle:vertical:hover{background:rgba(255,255,255,0.30);}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
+        )
+        ai_scroll.setWidget(t_ai)
+        tabs.addTab(ai_scroll, "AI")
 
         # ── Tab Info ────────────────────────────────────────────
         t_info = QWidget(); t_info.setStyleSheet("background:transparent;")
-        til = QVBoxLayout(t_info); til.setContentsMargins(24, 20, 24, 20); til.setSpacing(10)
+        til = QVBoxLayout(t_info); til.setContentsMargins(24, 22, 24, 20); til.setSpacing(14)
         try:
             conn = get_conn(); c = conn.cursor()
             n_ss = c.execute("SELECT COUNT(*) FROM screenshots").fetchone()[0]
             n_au = c.execute("SELECT COUNT(*) FROM audio_segments").fetchone()[0]
             conn.close()
         except Exception: n_ss = n_au = "N/A"
-        for txt in [
-            f"📸  Screenshot salvati: <b>{n_ss}</b>",
-            f"🎙️  Segmenti audio: <b>{n_au}</b>",
-            f"🗄️  Database: <b>deja.db</b>",
-        ]:
-            lbl = QLabel(txt); lbl.setFont(QFont("Segoe UI", 12))
-            lbl.setStyleSheet("color:#f3f4f6; background:transparent;")
-            til.addWidget(lbl)
+        info_sec = QLabel("ARCHIVIO"); info_sec.setObjectName("section"); til.addWidget(info_sec)
+
+        def _stat_row(name, value):
+            row = QHBoxLayout(); row.setSpacing(12)
+            k = QLabel(name); k.setObjectName("field")
+            v = QLabel(str(value)); v.setStyleSheet("color:#f4f4f7; background:transparent; font-size:15px; font-weight:700;")
+            row.addWidget(k); row.addStretch(); row.addWidget(v)
+            return row
+        til.addLayout(_stat_row("Screenshot salvati", n_ss))
+        til.addLayout(_stat_row("Segmenti audio", n_au))
+        til.addLayout(_stat_row("Database", "deja.db"))
         til.addStretch(); tabs.addTab(t_info, "Info")
 
         # ── Footer ──────────────────────────────────────────────
-        footer = QHBoxLayout(); footer.setContentsMargins(24, 12, 24, 16); footer.setSpacing(10)
+        foot_sep = QFrame(); foot_sep.setFrameShape(QFrame.Shape.HLine)
+        foot_sep.setStyleSheet("background:rgba(255,255,255,0.07); max-height:1px; min-height:1px; border:none;")
+        root.addWidget(foot_sep)
+        footer = QHBoxLayout(); footer.setContentsMargins(24, 14, 24, 16); footer.setSpacing(10)
         close_btn = QPushButton("Annulla"); close_btn.clicked.connect(self.reject)
-        save_btn = QPushButton("Salva"); save_btn.setObjectName("save_btn")
+        save_btn = QPushButton("Salva impostazioni"); save_btn.setObjectName("save_btn")
         save_btn.clicked.connect(self._save_and_close)
         footer.addStretch(); footer.addWidget(close_btn); footer.addWidget(save_btn)
         root.addLayout(footer)
+
+        # Riempi le tendine dei modelli all'apertura (in background, non blocca).
+        self._maybe_autodetect_models()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # Porta la finestra davanti all'overlay (anch'esso stays-on-top).
+        self.raise_(); self.activateWindow()
+
+    def _maybe_autodetect_models(self):
+        """Se l'endpoint è configurato (key o locale), interroga i modelli disponibili
+        e riempie la tendina. Silenzioso se fallisce (offline / key errata)."""
+        base = self._ai_url.text().strip() or getattr(_cfg, "AI_BASE_URL_DEFAULT", "")
+        key  = self._ai_key.text().strip()
+        if key or ai_assistant.is_local_endpoint(base):
+            self._ai_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
+            self._ai_test_status.setText("rilevo modelli…")
+            self._ai_models_worker = ModelsWorker(base, key)
+            self._ai_models_worker.done.connect(self._on_ai_models_detected)
+            self._ai_models_worker.start()
+        if self._vis_enabled.isChecked():
+            vbase = self._vis_url.text().strip() or getattr(_cfg, "AI_VISION_BASE_URL_DEFAULT", "")
+            vkey  = self._vis_key.text().strip()
+            if vkey or ai_assistant.is_local_endpoint(vbase):
+                self._vis_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
+                self._vis_test_status.setText("rilevo modelli…")
+                self._vis_models_worker = ModelsWorker(vbase, vkey)
+                self._vis_models_worker.done.connect(self._on_vis_models_detected)
+                self._vis_models_worker.start()
+
+    def _on_ai_models_detected(self, ok, res):
+        try:
+            if ok and isinstance(res, list) and res:
+                self._populate_combo_models(self._ai_model, res)
+                self._ai_test_status.setStyleSheet(f"color:{C_SS_HEX}; background:transparent;")
+                self._ai_test_status.setText(f"✓ {len(res)} modelli disponibili")
+            else:
+                self._ai_test_status.setText("")  # fallimento silenzioso
+        except RuntimeError:
+            pass  # dialog già chiuso
+
+    def _on_vis_models_detected(self, ok, res):
+        try:
+            if ok and isinstance(res, list) and res:
+                self._populate_combo_models(self._vis_model, res)
+                self._vis_test_status.setStyleSheet(f"color:{C_SS_HEX}; background:transparent;")
+                self._vis_test_status.setText(f"✓ {len(res)} modelli disponibili")
+            else:
+                self._vis_test_status.setText("")
+        except RuntimeError:
+            pass
 
     def _test_ai_connection(self):
         # Salva prima i campi correnti così il test usa i valori attuali
@@ -624,6 +787,77 @@ class SettingsDialog(QDialog):
             self._vis_test_status.setStyleSheet("color:#ef4444; background:transparent;")
             self._vis_test_status.setText("✗ " + msg)
         self._vis_test_btn.setEnabled(True)
+
+    @staticmethod
+    def _build_preset_row(line_edit, presets):
+        """Riga di bottoni-preset che riempiono un QLineEdit di base URL.
+        presets: list[(label, url)]. Usata per endpoint locali (Ollama/LM Studio) + cloud."""
+        row = QHBoxLayout(); row.setSpacing(8)
+        spacer = QLabel(""); spacer.setFixedWidth(110)
+        row.addWidget(spacer)
+        for name, url in presets:
+            b = QPushButton(name); b.setObjectName("chip")
+            b.setFixedHeight(28); b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _, u=url, le=line_edit: le.setText(u))
+            row.addWidget(b)
+        row.addStretch()
+        return row
+
+    @staticmethod
+    def _populate_combo_models(combo, ids):
+        """Riempi un combo editabile coi modelli rilevati, preservando la scelta corrente."""
+        cur = combo.currentText().strip()
+        combo.blockSignals(True)
+        combo.clear()
+        for mid in ids:
+            combo.addItem(mid)
+        if cur:
+            idx = combo.findText(cur)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            else:
+                combo.setCurrentText(cur)  # mantieni il modello scelto anche se non in lista
+        combo.blockSignals(False)
+
+    def _detect_ai_models(self):
+        base = self._ai_url.text().strip() or getattr(_cfg, "AI_BASE_URL_DEFAULT", "")
+        key  = self._ai_key.text().strip()
+        self._ai_detect_btn.setEnabled(False)
+        self._ai_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
+        self._ai_test_status.setText("⏳ rilevo modelli…")
+        QApplication.processEvents()
+        try:
+            ok, res = ai_assistant.list_models(base_url=base, api_key=key)
+        except Exception as e:
+            ok, res = False, str(e)
+        if ok:
+            self._populate_combo_models(self._ai_model, res)
+            self._ai_test_status.setStyleSheet(f"color:{C_SS_HEX}; background:transparent;")
+            self._ai_test_status.setText(f"✓ {len(res)} modelli rilevati")
+        else:
+            self._ai_test_status.setStyleSheet("color:#ef4444; background:transparent;")
+            self._ai_test_status.setText("✗ " + str(res))
+        self._ai_detect_btn.setEnabled(True)
+
+    def _detect_vision_models(self):
+        base = self._vis_url.text().strip() or getattr(_cfg, "AI_VISION_BASE_URL_DEFAULT", "")
+        key  = self._vis_key.text().strip()
+        self._vis_detect_btn.setEnabled(False)
+        self._vis_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
+        self._vis_test_status.setText("⏳ rilevo modelli…")
+        QApplication.processEvents()
+        try:
+            ok, res = ai_assistant.list_models(base_url=base, api_key=key)
+        except Exception as e:
+            ok, res = False, str(e)
+        if ok:
+            self._populate_combo_models(self._vis_model, res)
+            self._vis_test_status.setStyleSheet(f"color:{C_SS_HEX}; background:transparent;")
+            self._vis_test_status.setText(f"✓ {len(res)} modelli rilevati")
+        else:
+            self._vis_test_status.setStyleSheet("color:#ef4444; background:transparent;")
+            self._vis_test_status.setText("✗ " + str(res))
+        self._vis_detect_btn.setEnabled(True)
 
     def _save_and_close(self):
         from db import save_setting
@@ -682,6 +916,19 @@ class SettingsDialog(QDialog):
             save_setting("ai_vision_model",    self._vis_model.currentText().strip())
         except Exception as e:
             print(f"[Settings] Errore salvataggio Vision: {e}")
+
+        # 5. Toggle cattura (screenshot / audio)
+        try:
+            save_setting("capture_screenshots_enabled", "1" if self._cap_screens.isChecked() else "0")
+            save_setting("capture_audio_enabled", "1" if self._cap_audio.isChecked() else "0")
+            # Notifica al thread audio di rivalutare subito (apri/chiudi stream).
+            try:
+                from modules.audio import request_restart
+                request_restart()
+            except Exception as e:
+                print(f"[Settings] audio reload fail: {e}")
+        except Exception as e:
+            print(f"[Settings] Errore salvataggio toggle cattura: {e}")
 
         self.accept()
 
@@ -843,6 +1090,19 @@ class AllWorker(QThread):
     def run(self):
         try: self.done.emit(search_module.get_all())
         except Exception: self.done.emit([])
+
+class ModelsWorker(QThread):
+    """Interroga l'endpoint (chat o vision) per i modelli disponibili, in background,
+    così il combo si riempie da solo all'apertura delle Impostazioni senza bloccare la UI."""
+    done = pyqtSignal(bool, object)  # (ok, list[str] | str errore)
+    def __init__(self, base, key):
+        super().__init__(); self._base = base; self._key = key
+    def run(self):
+        try:
+            ok, res = ai_assistant.list_models(base_url=self._base, api_key=self._key)
+        except Exception as e:
+            ok, res = False, str(e)
+        self.done.emit(ok, res)
 
 class ChatWorker(QThread):
     chunk = pyqtSignal(str, str)         # (kind, content)
@@ -1781,8 +2041,10 @@ class ChatPage(QWidget):
 class DiaryDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("📖 Diario — Déjà")
+        self.setWindowTitle("Diario — Déjà")
         self.setMinimumSize(720, 560)
+        # Sopra l'overlay stays-on-top, altrimenti finisce dietro.
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setStyleSheet(f"QDialog{{background:{BG_HEX};}}")
 
         root = QVBoxLayout(self); root.setContentsMargins(20, 18, 20, 16); root.setSpacing(12)
@@ -2422,7 +2684,7 @@ class DejaWindow(QWidget):
 
         self._worker = self._all_worker = None
         self._results = []; self._filtered = []; self._all_results = []
-        self._all_mode = False
+        self._all_mode = False; self._all_loading = False
         self._active_date = self._active_filter = "all"
         self._current_pixmap = self._current_audio = self._current_type = None
         self._drag_pos = self._anim = None; self._busy = False
@@ -3019,6 +3281,7 @@ class DejaWindow(QWidget):
             self._set_action_btns("neutral"); self._preview_panel.set_border_kind("neutral")
             self.ai_card.reset()
             self._results = []; self._filtered = []; self._all_results = []; self._all_mode = False
+            self._all_loading = False
             self._chat_mode = False
             self._active_date = self._active_filter = "all"; self._current_pixmap = self._current_audio = self._current_type = None
             self.kbd.hide(); self._set_input(); self._reset_all_btn(); self._reset_chat_btn()
@@ -3043,7 +3306,7 @@ class DejaWindow(QWidget):
             save_search_query(q)
             self._refresh_search_completer()
         except Exception as e: print(f"[Search] save history fail: {e}")
-        self._all_mode = False; self._chat_mode = False; self._active_filter = "all"
+        self._all_mode = False; self._all_loading = False; self._chat_mode = False; self._active_filter = "all"
         self._reset_chat_btn(); self.ai_card.reset()
         self.sep.show()
         self.status.setStyleSheet(f"color:{TEXT_SECONDARY};background:transparent;font-size:10px;font-weight:600;letter-spacing:1px;")
@@ -3087,6 +3350,7 @@ class DejaWindow(QWidget):
 
     def _show_all(self):
         self._all_mode = True; self._chat_mode = False; self._all_results = []; self._active_date = self._active_filter = "all"
+        self._all_loading = True  # AllWorker in corso: i click sui filtri non devono mostrare "NESSUN ELEMENTO"
         self._reset_chat_btn(); self.ai_card.reset()
         self._set_input(placeholder="Esplora la timeline...", ro=True, color=TEXT_SECONDARY)
         self.kbd.hide()
@@ -3106,12 +3370,37 @@ class DejaWindow(QWidget):
         self._all_worker = AllWorker(); self._all_worker.done.connect(self._on_all_done); self._all_worker.start()
 
     def _on_all_done(self, results):
-        self._all_results = results; self._apply_date_filter(self._active_date)
+        # Guard contro race: l'utente può chiudere l'overlay (o premere "Chiudi",
+        # o cambiare modalità) mentre AllWorker gira in un thread. Con un DB grande
+        # get_all() è lento e la callback può arrivare tardi: senza questo guard
+        # ridisegnerebbe la UI "Esplora" (status + date_bar) sopra un overlay già
+        # collassato a 76px, causando l'overlap del testo (issue #2).
+        if not self._all_mode:
+            return
+        self._all_loading = False  # dati arrivati: i filtri possono valutare l'esito reale
+        self._all_results = results
+        # Riafferma l'altezza espansa: se l'animazione di _show_all è stata
+        # interrotta o la finestra è tornata compatta, i risultati avrebbero
+        # un'altezza insufficiente e si sovrapporrebbero alla barra di ricerca.
+        if self.height() < OVERLAY_H_EXPANDED:
+            self.setFixedHeight(OVERLAY_H_EXPANDED); self._animate_height(OVERLAY_H_EXPANDED)
+        self._apply_date_filter(self._active_date)
 
     def _apply_date_filter(self, key):
         self._active_date = key; self._style_dpills()
+        # Se l'AllWorker sta ancora caricando, NON valutare l'esito: il filtro è solo
+        # registrato (active_date + stile pillole) e lo spinner resta. Quando arrivano
+        # i dati, _on_all_done richiama _apply_date_filter con l'active_date corrente.
+        # Senza questo, cambiare filtro durante il load mostrava "NESSUN ELEMENTO" e
+        # interrompeva lo spinner, lasciando la schermata bloccata su DB grandi.
+        if getattr(self, "_all_loading", False):
+            self.status.setStyleSheet(f"color:{TEXT_SECONDARY};background:transparent;font-size:10px;font-weight:600;letter-spacing:1px;")
+            self.status.setText("CARICAMENTO TIMELINE..."); self.status.show()
+            self._show_loading(); self._redraw()
+            return
         if not self._all_results:
             self.loading_page.stop(); self.stack.hide()
+            self.status.setStyleSheet(f"color:{TEXT_SECONDARY};background:transparent;font-size:10px;font-weight:600;letter-spacing:1px;")
             self.status.setText("NESSUN ELEMENTO"); self._redraw()
             return
         now = datetime.now(timezone.utc)
@@ -3469,7 +3758,7 @@ class DejaWindow(QWidget):
     def _show_chat(self):
         if self._chat_mode:
             self._collapse(); return
-        self._chat_mode = True; self._all_mode = False
+        self._chat_mode = True; self._all_mode = False; self._all_loading = False
         self.ai_card.reset()
         self._set_input(placeholder="Modalità chat AI…", ro=True, color=TEXT_SECONDARY)
         self.kbd.hide()

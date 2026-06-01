@@ -1,7 +1,9 @@
 # ui/settings.py
 import pyaudiowpatch as pyaudio
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QPushButton
-from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QFrame
+)
+from PyQt6.QtCore import Qt
 from db import get_conn
 import i18n
 from i18n import t
@@ -33,21 +35,44 @@ def get_setting(key):
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Deja -- Impostazioni")
-        self.setFixedSize(480, 380)
-        self.setStyleSheet("background:#0f0f1a;color:#f1f0ff;font-family:'Segoe UI';")
-        layout = QVBoxLayout(self); layout.setSpacing(14); layout.setContentsMargins(24,24,24,24)
+        self.setWindowTitle("Audio e lingua — Déjà")
+        self.setFixedSize(480, 470)
+        # Stessa accortezza del dialog principale: l'overlay di Déjà è stays-on-top,
+        # quindi anche questa finestra deve restare sopra, altrimenti finisce dietro
+        # l'overlay e il modal blocca tutto.
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        try:
+            from ui.window import SETTINGS_QSS
+            self.setStyleSheet(SETTINGS_QSS)
+        except Exception:
+            self.setStyleSheet("QDialog{background:#17171c;} QLabel{color:#e7e7ec;}")
+
+        root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
+        body = QVBoxLayout(); body.setContentsMargins(26, 24, 26, 18); body.setSpacing(13)
+        root.addLayout(body, stretch=1)
+
+        def section(text):
+            l = QLabel(text); l.setObjectName("section"); body.addWidget(l)
+
+        def field(label, widget):
+            row = QHBoxLayout(); row.setSpacing(12)
+            k = QLabel(label); k.setObjectName("field"); k.setFixedWidth(140)
+            row.addWidget(k); row.addWidget(widget, stretch=1)
+            body.addLayout(row)
+
         devices = _get_all_devices()
-        mics      = [(idx,name) for t,idx,name in devices if t=="mic"]
-        loopbacks = [(idx,name) for t,idx,name in devices if t=="loopback"]
-        layout.addWidget(QLabel("Microfono (input):"))
-        self.mic_combo = QComboBox(); self.mic_combo.addItem("-- Non registrare --", None)
-        for idx,name in mics: self.mic_combo.addItem(name, idx)
-        layout.addWidget(self.mic_combo)
-        layout.addWidget(QLabel("Audio PC (output loopback):"))
-        self.out_combo = QComboBox(); self.out_combo.addItem("-- Non registrare --", None)
-        for idx,name in loopbacks: self.out_combo.addItem(name, idx)
-        layout.addWidget(self.out_combo)
+        mics      = [(idx, name) for tp, idx, name in devices if tp == "mic"]
+        loopbacks = [(idx, name) for tp, idx, name in devices if tp == "loopback"]
+
+        section("AUDIO")
+        self.mic_combo = QComboBox(); self.mic_combo.addItem("Non registrare", None)
+        for idx, name in mics: self.mic_combo.addItem(name, idx)
+        field("Microfono", self.mic_combo)
+
+        self.out_combo = QComboBox(); self.out_combo.addItem("Non registrare", None)
+        for idx, name in loopbacks: self.out_combo.addItem(name, idx)
+        field("Audio di sistema", self.out_combo)
+
         saved_mic = get_setting("audio_mic_index"); saved_out = get_setting("audio_out_index")
         if saved_mic:
             for i in range(self.mic_combo.count()):
@@ -55,8 +80,9 @@ class SettingsDialog(QDialog):
         if saved_out:
             for i in range(self.out_combo.count()):
                 if str(self.out_combo.itemData(i)) == saved_out: self.out_combo.setCurrentIndex(i)
-        # ── Lingua interfaccia ──
-        layout.addWidget(QLabel(t("set.ui_language") + ":"))
+
+        body.addSpacing(6)
+        section(t("set.ui_language").upper())
         self.lang_combo = QComboBox()
         for code, name in i18n.LANGUAGES.items():
             self.lang_combo.addItem(f"{i18n.LANG_FLAGS.get(code,'')} {name}", code)
@@ -64,10 +90,8 @@ class SettingsDialog(QDialog):
         for i in range(self.lang_combo.count()):
             if self.lang_combo.itemData(i) == cur_lang:
                 self.lang_combo.setCurrentIndex(i)
-        layout.addWidget(self.lang_combo)
+        field(t("set.ui_language"), self.lang_combo)
 
-        # ── Lingue OCR ──
-        layout.addWidget(QLabel(t("set.ocr_language") + ":"))
         self.ocr_combo = QComboBox()
         cur_ocr = get_setting("ocr_lang") or "ita+eng"
         presets = list(OCR_PRESETS)
@@ -76,16 +100,24 @@ class SettingsDialog(QDialog):
         for p in presets:
             self.ocr_combo.addItem(p, p)
         self.ocr_combo.setCurrentIndex(max(0, presets.index(cur_ocr)))
-        layout.addWidget(self.ocr_combo)
+        field(t("set.ocr_language"), self.ocr_combo)
 
-        note = QLabel(t("set.restart_note")); note.setStyleSheet("color:#8b8d98;font-size:11px;")
-        layout.addWidget(note)
+        note = QLabel(t("set.restart_note")); note.setObjectName("caption")
+        note.setWordWrap(True); body.addWidget(note)
+        body.addStretch()
 
-        btn = QPushButton("Salva"); btn.setFixedHeight(36)
-        btn.setStyleSheet("QPushButton{background:rgba(167,139,250,0.15);color:#a78bfa;"
-                          "border:1px solid rgba(167,139,250,0.3);border-radius:8px;}"
-                          "QPushButton:hover{background:rgba(167,139,250,0.25);}")
-        btn.clicked.connect(self._save); layout.addWidget(btn)
+        foot_sep = QFrame(); foot_sep.setFrameShape(QFrame.Shape.HLine)
+        foot_sep.setStyleSheet("background:rgba(255,255,255,0.07); max-height:1px; min-height:1px; border:none;")
+        root.addWidget(foot_sep)
+        footer = QHBoxLayout(); footer.setContentsMargins(26, 14, 26, 16); footer.setSpacing(10)
+        cancel = QPushButton("Annulla"); cancel.clicked.connect(self.reject)
+        save = QPushButton("Salva"); save.setObjectName("save_btn"); save.clicked.connect(self._save)
+        footer.addStretch(); footer.addWidget(cancel); footer.addWidget(save)
+        root.addLayout(footer)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.raise_(); self.activateWindow()
 
     def _save(self):
         mic_idx = self.mic_combo.currentData(); out_idx = self.out_combo.currentData()
