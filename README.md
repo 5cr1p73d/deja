@@ -169,7 +169,6 @@ db.py               schema SQLite + sqlite-vec + settings
 modules/            capturer, indexer, audio, search, ai_assistant, ask_screen, privacy
 ui/                 window (overlay), tray, settings, hotkey, onboarding
 i18n.py             traduzioni it/en/es
-web/                sito Next.js
 obsidian/deja/      vault di documentazione interna
 ```
 
