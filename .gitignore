@@ -19,11 +19,8 @@ build_log*.txt
 # Redistributable VC++ scaricato a parte per compilare l'installer (vedi deja.iss)
 vc_redist.x64.exe
 
-# ── Sito web (ha il suo .gitignore) ──
-web/node_modules/
-web/.next/
-web/.env
-web/*.db
+# ── Sito web: ora è in un repo separato e privato (github.com/5cr1p73d/deja-web) ──
+/web/
 
 # ── IDE / OS ──
 .vs/
