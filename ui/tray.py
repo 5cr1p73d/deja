@@ -1,6 +1,7 @@
 # ui/tray.py
 import io
-from PIL import Image, ImageDraw
+import re
+from PIL import Image, ImageDraw, ImageFont
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtCore import QTimer
@@ -15,18 +16,61 @@ import autostart
 import i18n
 from i18n import t
 
+# Menu sobrio e coerente col resto dell'app: un accento lavanda, voci arrotondate.
+MENU_QSS = """
+QMenu {
+    background:#1b1b21; color:#e7e7ec;
+    border:1px solid rgba(255,255,255,0.09); border-radius:11px; padding:7px;
+}
+QMenu::item {
+    padding:8px 24px 8px 14px; margin:1px 4px; border-radius:7px; font-size:12px;
+}
+QMenu::item:selected { background:rgba(167,139,250,0.20); color:#ffffff; }
+QMenu::item:disabled { color:#6a6a74; }
+QMenu::separator { height:1px; background:rgba(255,255,255,0.07); margin:6px 12px; }
+QMenu::indicator { width:15px; height:15px; left:8px; }
+QMenu::right-arrow { width:10px; height:10px; margin-right:8px; }
+"""
+
+# Toglie eventuali emoji/simboli iniziali dalle etichette i18n: tray pulito e sobrio.
+_LEAD_SYMBOLS = re.compile(r'^[\s\W_]+', re.UNICODE)
+def _lbl(s: str) -> str:
+    return _LEAD_SYMBOLS.sub('', s or '').strip()
+
+
+def _load_font(size):
+    for name in ("segoeuisb.ttf", "seguisb.ttf", "segoeuib.ttf", "segoeui.ttf", "arialbd.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
 def _make_tray_icon(paused=False):
-    size = 64
-    img = Image.new("RGBA", (size, size), (0,0,0,0))
-    draw = ImageDraw.Draw(img)
-    base = "#3a3a44" if paused else "#6c63ff"
-    draw.ellipse([4, 4, size-4, size-4], fill=base)
-    draw.text((22, 16), "D", fill="white")
+    """Icona vettoriale-like: disco brand con 'D' centrata, anello sottile,
+    pallino REC quando attivo. Disegnata a 256px e ridotta da Qt (bordi netti)."""
+    S = 256
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    if paused:
+        fill, ring, txt = (60, 60, 70, 255), (92, 92, 104, 255), (158, 158, 168, 255)
+    else:
+        fill, ring, txt = (108, 99, 255, 255), (150, 141, 255, 255), (255, 255, 255, 255)
+    pad = 16
+    d.ellipse([pad, pad, S - pad, S - pad], fill=fill)
+    d.ellipse([pad, pad, S - pad, S - pad], outline=ring, width=5)
+    # "D" centrata
+    f = _load_font(148)
+    try:
+        bb = d.textbbox((0, 0), "D", font=f)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        d.text(((S - tw) / 2 - bb[0], (S - th) / 2 - bb[1]), "D", font=f, fill=txt)
+    except Exception:
+        d.text((S / 2 - 40, S / 2 - 60), "D", fill=txt)
     if not paused:
-        # pallino rosso "REC" = registrazione attiva (indicatore visibile)
-        r = 10
-        draw.ellipse([size-6-2*r, size-6-2*r, size-6, size-6], fill="#ef4444")
-        draw.ellipse([size-6-2*r, size-6-2*r, size-6, size-6], outline="#0e0e12", width=2)
+        # Pallino REC con alone scuro per stacco dallo sfondo
+        d.ellipse([S - 90, S - 90, S - 12, S - 12], fill=(20, 20, 26, 255))
+        d.ellipse([S - 82, S - 82, S - 20, S - 20], fill=(239, 68, 68, 255))
     buf = io.BytesIO(); img.save(buf, format="PNG")
     pixmap = QPixmap(); pixmap.loadFromData(buf.getvalue())
     return QIcon(pixmap)
@@ -39,31 +83,31 @@ class DejaTray(QSystemTrayIcon):
         self._icon_paused = _make_tray_icon(paused=True)
         self.setIcon(self._icon_active)
         self.setToolTip(t("tray.tooltip_active"))
-        menu = QMenu()
-        a_open = menu.addAction(t("tray.open")); a_open.triggered.connect(self._open_window)
+        menu = QMenu(); menu.setStyleSheet(MENU_QSS)
+        a_open = menu.addAction(_lbl(t("tray.open")) + "   (Ctrl+Shift+D)"); a_open.triggered.connect(self._open_window)
         menu.addSeparator()
-        a_set  = menu.addAction(t("tray.audio_settings")); a_set.triggered.connect(self._open_settings)
-        a_ai   = menu.addAction(t("tray.ai_settings")); a_ai.triggered.connect(self._open_ai_settings)
-        a_diary = menu.addAction(t("tray.diary")); a_diary.triggered.connect(self._open_diary)
-        a_ask   = menu.addAction(t("tray.ask_screen"))
+        a_set  = menu.addAction(_lbl(t("tray.audio_settings"))); a_set.triggered.connect(self._open_settings)
+        a_ai   = menu.addAction(_lbl(t("tray.ai_settings"))); a_ai.triggered.connect(self._open_ai_settings)
+        a_diary = menu.addAction(_lbl(t("tray.diary"))); a_diary.triggered.connect(self._open_diary)
+        a_ask   = menu.addAction(_lbl(t("tray.ask_screen")))
         a_ask.triggered.connect(self._open_ask_screen)
         menu.addSeparator()
-        a_backup = menu.addAction(t("tray.backup")); a_backup.triggered.connect(self._backup)
-        a_restore = menu.addAction(t("tray.restore")); a_restore.triggered.connect(self._restore)
+        a_backup = menu.addAction(_lbl(t("tray.backup"))); a_backup.triggered.connect(self._backup)
+        a_restore = menu.addAction(_lbl(t("tray.restore"))); a_restore.triggered.connect(self._restore)
         menu.addSeparator()
-        priv_menu = menu.addMenu(t("tray.privacy"))
-        for label, secs in [(t("tray.pause_5"), 300), (t("tray.pause_15"), 900),
-                            (t("tray.pause_30"), 1800), (t("tray.pause_2h"), 7200)]:
+        priv_menu = menu.addMenu(_lbl(t("tray.privacy"))); priv_menu.setStyleSheet(MENU_QSS)
+        for label, secs in [(_lbl(t("tray.pause_5")), 300), (_lbl(t("tray.pause_15")), 900),
+                            (_lbl(t("tray.pause_30")), 1800), (_lbl(t("tray.pause_2h")), 7200)]:
             a = priv_menu.addAction(label)
             a.triggered.connect(lambda _checked, s=secs, l=label: self._pause(s, l))
         priv_menu.addSeparator()
-        a_unpause = priv_menu.addAction(t("tray.resume"))
+        a_unpause = priv_menu.addAction(_lbl(t("tray.resume")))
         a_unpause.triggered.connect(self._unpause)
         menu.addSeparator()
-        a_restart_audio = menu.addAction(t("tray.restart_audio"))
+        a_restart_audio = menu.addAction(_lbl(t("tray.restart_audio")))
         a_restart_audio.triggered.connect(self._restart_audio)
         menu.addSeparator()
-        self._a_autostart = menu.addAction(t("tray.autostart"))
+        self._a_autostart = menu.addAction(_lbl(t("tray.autostart")))
         self._a_autostart.setCheckable(True)
         self._a_autostart.setEnabled(autostart.is_supported())
         try:
@@ -71,9 +115,9 @@ class DejaTray(QSystemTrayIcon):
         except Exception:
             pass
         self._a_autostart.toggled.connect(self._toggle_autostart)
-        a_about = menu.addAction(t("tray.about")); a_about.triggered.connect(self._open_about)
+        a_about = menu.addAction(_lbl(t("tray.about"))); a_about.triggered.connect(self._open_about)
         menu.addSeparator()
-        a_quit = menu.addAction(t("tray.quit")); a_quit.triggered.connect(self._quit)
+        a_quit = menu.addAction(_lbl(t("tray.quit"))); a_quit.triggered.connect(self._quit)
         self.setContextMenu(menu)
         self.activated.connect(self._on_activated)
 
@@ -134,7 +178,7 @@ class DejaTray(QSystemTrayIcon):
         self._stop_event.set(); self._app.quit()
 
     def _open_settings(self):
-        dlg = SettingsDialog(); dlg.exec()
+        dlg = SettingsDialog(self._window); dlg.exec()
 
     def _open_ai_settings(self):
         dlg = AppSettingsDialog(self._window); dlg.exec()
