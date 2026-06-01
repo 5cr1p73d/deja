@@ -23,6 +23,7 @@ const PHASES: { v: string; title: string; tone: "violet" | "emerald" | "amber"; 
   { v: "Fase 11", title: "Diary AI + fix", tone: "violet", items: ["Fix crash Unicode", "Retry 3x backoff su 502/503/504", "DiaryDialog con date picker"] },
   { v: "Fase 13", title: "Ask Screen", tone: "amber", items: ["Cattura istantanea + OCR + AI", "Hotkey Ctrl+Shift+A", "Refactor multi-hotkey", "Snap salvato in timeline"] },
   { v: "Fase 14", title: "Vision (Gemini)", tone: "violet", items: ["Vera vision per Ask Screen", "Endpoint Gemini OpenAI-compat", "Client separato dall'AI testo", "Badge vision · gemini-…", "Disclaimer privacy esplicito"] },
+  { v: "v1.0.1", title: "AI libera & fix", tone: "emerald", items: ["Qualsiasi provider/modello OpenAI-compat — anche per Ask Screen", "Modelli locali: preset Ollama e LM Studio (nessuna API key)", "Rilevamento automatico dei modelli disponibili", "Toggle per disattivare cattura screenshot o audio", "Fix glitch timeline Esplora + finestre impostazioni davanti", "Impostazioni ridisegnate e tray rinnovato"] },
 ];
 
 export default function ChangelogPage() {
