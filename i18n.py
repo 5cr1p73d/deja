@@ -94,6 +94,10 @@ _TR = {
         "set.system_audio": "Audio di sistema",
         "set.cancel": "Annulla",
         "set.save": "Salva",
+        "set.restart_title": "Riavviare Déjà?",
+        "set.restart_body": "Hai cambiato la lingua. Riavviare ora per applicarla?",
+        "set.restart_now": "Riavvia ora",
+        "set.restart_later": "Più tardi",
         # ── Window: pannello Impostazioni ──
         "win.set_title": "Impostazioni — Déjà",
         "win.sec_models": "MODELLI",
@@ -343,6 +347,10 @@ _TR = {
         "set.system_audio": "System audio",
         "set.cancel": "Cancel",
         "set.save": "Save",
+        "set.restart_title": "Restart Déjà?",
+        "set.restart_body": "You changed the language. Restart now to apply it?",
+        "set.restart_now": "Restart now",
+        "set.restart_later": "Later",
         # ── Window: Settings panel ──
         "win.set_title": "Settings — Déjà",
         "win.sec_models": "MODELS",
@@ -592,6 +600,10 @@ _TR = {
         "set.system_audio": "Audio del sistema",
         "set.cancel": "Cancelar",
         "set.save": "Guardar",
+        "set.restart_title": "¿Reiniciar Déjà?",
+        "set.restart_body": "Has cambiado el idioma. ¿Reiniciar ahora para aplicarlo?",
+        "set.restart_now": "Reiniciar ahora",
+        "set.restart_later": "Más tarde",
         # ── Window: panel de Ajustes ──
         "win.set_title": "Ajustes — Déjà",
         "win.sec_models": "MODELOS",

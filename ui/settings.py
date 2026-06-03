@@ -120,6 +120,7 @@ class SettingsDialog(QDialog):
         self.raise_(); self.activateWindow()
 
     def _save(self):
+        old_lang = i18n.get_language()
         mic_idx = self.mic_combo.currentData(); out_idx = self.out_combo.currentData()
         conn = get_conn(); c = conn.cursor()
         if mic_idx is not None: c.execute("INSERT OR REPLACE INTO settings VALUES (?,?)",("audio_mic_index",mic_idx))
@@ -129,7 +130,8 @@ class SettingsDialog(QDialog):
         # Lingua UI + lingue OCR
         c.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", ("ocr_lang", self.ocr_combo.currentData()))
         conn.commit(); conn.close()
-        i18n.set_language(self.lang_combo.currentData())
+        new_lang = self.lang_combo.currentData()
+        i18n.set_language(new_lang)
         # Hot-swap: trigger restart immediato audio thread (no app restart needed)
         try:
             from modules.audio import request_restart
@@ -138,3 +140,24 @@ class SettingsDialog(QDialog):
         except Exception as e:
             print(f"[Settings] Hot-swap fail: {e}")
         self.accept()
+        # Il cambio lingua richiede un riavvio per ridisegnare tutta la UI.
+        if new_lang != old_lang:
+            self._prompt_restart()
+
+    def _prompt_restart(self):
+        """Chiede conferma e, se accettata, riavvia l'app (lo shutdown pulito +
+        rilancio avvengono in main.py via la proprietà 'restart_requested')."""
+        from PyQt6.QtWidgets import QMessageBox, QApplication
+        box = QMessageBox()
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(t("set.restart_title"))
+        box.setText(t("set.restart_body"))
+        box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        yes = box.addButton(t("set.restart_now"), QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(t("set.restart_later"), QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is yes:
+            app = QApplication.instance()
+            if app is not None:
+                app.setProperty("restart_requested", True)
+                app.quit()

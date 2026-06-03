@@ -80,6 +80,19 @@ def _show_torch_degraded_dialog():
         pass
 
 
+def _relaunch():
+    """Riavvia l'app (stesso eseguibile). Usato dopo il cambio lingua.
+    Chiamato solo dopo lo shutdown pulito (thread fermati, DB compattato)."""
+    import subprocess
+    try:
+        if getattr(sys, "frozen", False):
+            subprocess.Popen([sys.executable])
+        else:
+            subprocess.Popen([sys.executable, *sys.argv])
+    except Exception as e:
+        logging.getLogger("deja").error("relaunch fallito: %r", e)
+
+
 def _handle_exception(exc_type, exc_value, exc_tb):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_tb)
@@ -192,6 +205,9 @@ def main():
     for t in threads:
         t.join(timeout=5)
     vacuum_db()
+    # Riavvio richiesto (es. cambio lingua): rilancia dopo lo shutdown pulito.
+    if app.property("restart_requested"):
+        _relaunch()
     sys.exit(exit_code)
 
 if __name__ == "__main__":
