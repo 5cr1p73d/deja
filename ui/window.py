@@ -26,6 +26,8 @@ from PyQt6.QtGui import (
 from db import get_conn
 from modules import search as search_module
 from modules import ai_assistant
+import i18n
+from i18n import t
 try:
     import config as _cfg
 except Exception:
@@ -145,13 +147,13 @@ def _date_bucket_label(ts_iso):
     today = datetime.now().date()
     d = local.date()
     days_ago = (today - d).days
-    if days_ago == 0: return ("oggi", "OGGI")
-    if days_ago == 1: return ("ieri", "IERI")
-    if days_ago < 7:  return (f"d{days_ago}", f"{days_ago} GIORNI FA")
-    if days_ago < 30: return (f"w{days_ago // 7}", f"{days_ago // 7} SETTIMANE FA")
+    if days_ago == 0: return ("oggi", t("win.bkt_today"))
+    if days_ago == 1: return ("ieri", t("win.bkt_yesterday"))
+    if days_ago < 7:  return (f"d{days_ago}", t("win.bkt_days_ago", n=days_ago))
+    if days_ago < 30: return (f"w{days_ago // 7}", t("win.bkt_weeks_ago", n=days_ago // 7))
     # Mese
     return (f"m{local.year}{local.month:02d}",
-            f"{_MONTHS_IT[local.month-1].upper()} {local.year}")
+            f"{i18n.months()[local.month-1].upper()} {local.year}")
 
 OVERLAY_W_FS = 1400        # larghezza fullscreen
 OVERLAY_H_FS = 860         # altezza fullscreen
@@ -209,19 +211,19 @@ def _human_ago(ts_iso):
     if secs < 0:
         return ts.astimezone().strftime("%H:%M")
     if secs < 60:
-        return "ora"
+        return t("win.rel_now")
     if secs < 3600:
-        return f"{int(secs // 60)} min fa"
+        return t("win.rel_min_ago", n=int(secs // 60))
     local = ts.astimezone()
     today = datetime.now().date()
     d = local.date()
     if d == today:
-        return f"oggi {local.strftime('%H:%M')}"
+        return t("win.rel_today_at", time=local.strftime('%H:%M'))
     if (today - d).days == 1:
-        return f"ieri {local.strftime('%H:%M')}"
+        return t("win.rel_yesterday_at", time=local.strftime('%H:%M'))
     if (today - d).days < 7:
-        return f"{_DAYS_IT[local.weekday()]} {local.strftime('%H:%M')}"
-    return f"{_DAYS_IT[local.weekday()]} {local.day} {_MONTHS_IT[local.month-1]}"
+        return f"{i18n.days()[local.weekday()]} {local.strftime('%H:%M')}"
+    return f"{i18n.days()[local.weekday()]} {local.day} {i18n.months()[local.month-1]}"
 
 def _highlight_tokens(text, query):
     """HTML-escape + wrap matching tokens in <mark>."""
@@ -403,7 +405,7 @@ SETTINGS_QSS = """
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Impostazioni — Déjà")
+        self.setWindowTitle(t("win.set_title"))
         self.setFixedSize(660, 720)
         # L'overlay di Déjà è WindowStaysOnTopHint|Tool: senza questo flag la finestra
         # impostazioni resta DIETRO l'overlay, il modal blocca l'input e sembra tutto
@@ -416,10 +418,10 @@ class SettingsDialog(QDialog):
         # ── Tab Ricerca ─────────────────────────────────────────
         t_search = QWidget(); t_search.setStyleSheet("background:transparent;")
         tsl = QVBoxLayout(t_search); tsl.setContentsMargins(24, 22, 24, 20); tsl.setSpacing(14)
-        srch_sec = QLabel("MODELLI"); srch_sec.setObjectName("section"); tsl.addWidget(srch_sec)
+        srch_sec = QLabel(t("win.sec_models")); srch_sec.setObjectName("section"); tsl.addWidget(srch_sec)
         for label, attr, placeholder in [
-            ("Modello Embedding", "EMBEDDING_MODEL", "es. paraphrase-multilingual-mpnet-base-v2"),
-            ("Modello Whisper",   "WHISPER_MODEL",   "tiny / base / small / medium"),
+            (t("win.f_embedding"), "EMBEDDING_MODEL", "es. paraphrase-multilingual-mpnet-base-v2"),
+            (t("win.f_whisper"),   "WHISPER_MODEL",   "tiny / base / small / medium"),
         ]:
             row = QHBoxLayout(); row.setSpacing(12)
             lbl = QLabel(label); lbl.setObjectName("field"); lbl.setFixedWidth(160)
@@ -429,7 +431,7 @@ class SettingsDialog(QDialog):
             row.addWidget(lbl); row.addWidget(inp); tsl.addLayout(row)
 
         row2 = QHBoxLayout(); row2.setSpacing(12)
-        lbl2 = QLabel("Soglia audio"); lbl2.setObjectName("field"); lbl2.setFixedWidth(160)
+        lbl2 = QLabel(t("win.f_audio_threshold")); lbl2.setObjectName("field"); lbl2.setFixedWidth(160)
         self._score_spin = QSpinBox()
         self._score_spin.setRange(1, 99); self._score_spin.setSuffix("%")
         try:
@@ -438,15 +440,15 @@ class SettingsDialog(QDialog):
         except Exception: self._score_spin.setValue(25)
         row2.addWidget(lbl2); row2.addWidget(self._score_spin); row2.addStretch()
         tsl.addLayout(row2); tsl.addStretch()
-        tabs.addTab(t_search, "Ricerca")
+        tabs.addTab(t_search, t("win.tab_search"))
 
         # ── Tab Cattura ─────────────────────────────────────────
         t_cap = QWidget(); t_cap.setStyleSheet("background:transparent;")
         tcl = QVBoxLayout(t_cap); tcl.setContentsMargins(24, 22, 24, 20); tcl.setSpacing(14)
-        cap_sec = QLabel("INTERVALLI"); cap_sec.setObjectName("section"); tcl.addWidget(cap_sec)
+        cap_sec = QLabel(t("win.sec_intervals")); cap_sec.setObjectName("section"); tcl.addWidget(cap_sec)
         for label, attr, placeholder in [
-            ("Intervallo screenshot (s)", "CAPTURE_INTERVAL", "es. 5"),
-            ("Chunk audio (s)",           "AUDIO_CHUNK_SECONDS", "es. 30"),
+            (t("win.f_screenshot_interval"), "CAPTURE_INTERVAL", "es. 5"),
+            (t("win.f_audio_chunk"),         "AUDIO_CHUNK_SECONDS", "es. 30"),
         ]:
             row = QHBoxLayout(); row.setSpacing(12)
             lbl = QLabel(label); lbl.setObjectName("field"); lbl.setFixedWidth(180)
@@ -459,19 +461,17 @@ class SettingsDialog(QDialog):
         from PyQt6.QtWidgets import QCheckBox as _QCheckBox
         from db import get_setting as _get_setting
         tcl.addSpacing(6)
-        cap_sec2 = QLabel("REGISTRAZIONE"); cap_sec2.setObjectName("section"); tcl.addWidget(cap_sec2)
-        self._cap_screens = _QCheckBox("Cattura gli screenshot dello schermo")
+        cap_sec2 = QLabel(t("win.sec_recording")); cap_sec2.setObjectName("section"); tcl.addWidget(cap_sec2)
+        self._cap_screens = _QCheckBox(t("win.chk_cap_screens"))
         self._cap_screens.setChecked((_get_setting("capture_screenshots_enabled", "1") or "1") == "1")
         tcl.addWidget(self._cap_screens)
-        self._cap_audio = _QCheckBox("Registra e trascrivi l'audio (microfono e sistema)")
+        self._cap_audio = _QCheckBox(t("win.chk_cap_audio"))
         self._cap_audio.setChecked((_get_setting("capture_audio_enabled", "1") or "1") == "1")
         tcl.addWidget(self._cap_audio)
-        cap_hint = QLabel(
-            "Puoi spegnere la registrazione senza chiudere l'app: il cambiamento è immediato."
-        )
+        cap_hint = QLabel(t("win.cap_hint"))
         cap_hint.setObjectName("caption"); cap_hint.setWordWrap(True); tcl.addWidget(cap_hint)
 
-        tcl.addStretch(); tabs.addTab(t_cap, "Cattura")
+        tcl.addStretch(); tabs.addTab(t_cap, t("win.tab_capture"))
 
         # ── Tab AI ──────────────────────────────────────────────
         t_ai = QWidget(); t_ai.setStyleSheet("background:transparent;")
@@ -480,20 +480,20 @@ class SettingsDialog(QDialog):
         # carica valori correnti dal DB
         ai_cfg = ai_assistant.get_ai_config()
 
-        ai_sec = QLabel("ASSISTENTE · CHAT"); ai_sec.setObjectName("section")
+        ai_sec = QLabel(t("win.sec_assistant_chat")); ai_sec.setObjectName("section")
         tail.addWidget(ai_sec)
 
         row_key = QHBoxLayout(); row_key.setSpacing(12)
-        lbl_key = QLabel("API Key"); lbl_key.setObjectName("field"); lbl_key.setFixedWidth(110)
+        lbl_key = QLabel(t("win.f_api_key")); lbl_key.setObjectName("field"); lbl_key.setFixedWidth(110)
         self._ai_key = QLineEdit(); self._ai_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._ai_key.setPlaceholderText("Lascia vuoto se usi un modello locale")
+        self._ai_key.setPlaceholderText(t("win.ph_ai_key"))
         self._ai_key.setText(ai_cfg.get("api_key", ""))
         row_key.addWidget(lbl_key); row_key.addWidget(self._ai_key); tail.addLayout(row_key)
 
         row_url = QHBoxLayout(); row_url.setSpacing(12)
-        lbl_url = QLabel("Base URL"); lbl_url.setObjectName("field"); lbl_url.setFixedWidth(110)
+        lbl_url = QLabel(t("win.f_base_url")); lbl_url.setObjectName("field"); lbl_url.setFixedWidth(110)
         self._ai_url = QLineEdit()
-        self._ai_url.setPlaceholderText("es. http://localhost:11434/v1  oppure  https://tuo-provider/v1")
+        self._ai_url.setPlaceholderText(t("win.ph_url"))
         url_val = ai_cfg.get("base_url", "")
         default_url = getattr(_cfg, "AI_BASE_URL_DEFAULT", "")
         if url_val and url_val != default_url:
@@ -503,47 +503,40 @@ class SettingsDialog(QDialog):
             ("Ollama", "http://localhost:11434/v1"),
             ("LM Studio", "http://localhost:1234/v1"),
         ]))
-        local_hint = QLabel(
-            "Funziona con qualsiasi endpoint OpenAI-compatibile, locale o cloud. "
-            "In locale avvia Ollama o LM Studio, scegli il preset e premi Rileva: "
-            "l'API Key non serve. I modelli consigliati sono nel README."
-        )
+        local_hint = QLabel(t("win.local_hint"))
         local_hint.setObjectName("caption"); local_hint.setWordWrap(True); tail.addWidget(local_hint)
 
         row_model = QHBoxLayout(); row_model.setSpacing(12)
-        lbl_model = QLabel("Modello"); lbl_model.setObjectName("field"); lbl_model.setFixedWidth(110)
+        lbl_model = QLabel(t("win.f_model")); lbl_model.setObjectName("field"); lbl_model.setFixedWidth(110)
         self._ai_model = QComboBox()
         self._ai_model.setEditable(True)  # qualsiasi modello, anche non in lista
         models = getattr(_cfg, "AI_MODELS", [])
         for m in models:
             self._ai_model.addItem(m)
-        cur_model = ai_cfg.get("model", models[0])
+        cur_model = ai_cfg.get("model") or (models[0] if models else "")
         idx_match = self._ai_model.findText(cur_model)
         if idx_match >= 0:
             self._ai_model.setCurrentIndex(idx_match)
         else:
             self._ai_model.setCurrentText(cur_model)
-        self._ai_detect_btn = QPushButton("Rileva"); self._ai_detect_btn.setObjectName("accent")
+        self._ai_detect_btn = QPushButton(t("win.btn_detect")); self._ai_detect_btn.setObjectName("accent")
         self._ai_detect_btn.setFixedHeight(38); self._ai_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._ai_detect_btn.setToolTip("Rileva i modelli disponibili sull'endpoint (richiede Base URL, e API Key se cloud)")
+        self._ai_detect_btn.setToolTip(t("win.tip_detect"))
         self._ai_detect_btn.clicked.connect(self._detect_ai_models)
         row_model.addWidget(lbl_model); row_model.addWidget(self._ai_model, stretch=1)
         row_model.addWidget(self._ai_detect_btn); tail.addLayout(row_model)
 
         from PyQt6.QtWidgets import QCheckBox
-        self._ai_inline = QCheckBox("Mostra risposta AI sopra i risultati di ricerca")
+        self._ai_inline = QCheckBox(t("win.chk_ai_inline"))
         self._ai_inline.setChecked(ai_cfg.get("inline", False))
         tail.addWidget(self._ai_inline)
 
-        hint = QLabel(
-            "La chat cerca da sola nei tuoi ricordi mentre le scrivi: chiedile pure "
-            "in linguaggio naturale, capirà cosa cercare."
-        )
+        hint = QLabel(t("win.chat_hint"))
         hint.setObjectName("caption"); hint.setWordWrap(True)
         tail.addWidget(hint)
 
         test_row = QHBoxLayout(); test_row.setSpacing(10)
-        self._ai_test_btn = QPushButton("Prova connessione"); self._ai_test_btn.setObjectName("accent")
+        self._ai_test_btn = QPushButton(t("win.btn_test_conn")); self._ai_test_btn.setObjectName("accent")
         self._ai_test_btn.setFixedHeight(34); self._ai_test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._ai_test_btn.clicked.connect(self._test_ai_connection)
         test_row.addWidget(self._ai_test_btn)
@@ -560,7 +553,7 @@ class SettingsDialog(QDialog):
         sep.setStyleSheet("background:rgba(255,255,255,0.07); max-height:1px; min-height:1px; border:none;")
         tail.addSpacing(4); tail.addWidget(sep); tail.addSpacing(4)
 
-        vis_title = QLabel("VISION · CHIEDI ALLO SCHERMO"); vis_title.setObjectName("section")
+        vis_title = QLabel(t("win.sec_vision")); vis_title.setObjectName("section")
         tail.addWidget(vis_title)
 
         try:
@@ -569,22 +562,22 @@ class SettingsDialog(QDialog):
         except Exception:
             vis_cfg = {"enabled": False, "base_url": "", "api_key": "", "model": ""}
 
-        self._vis_enabled = QCheckBox("Manda l'immagine dello schermo al modello (non solo il testo OCR)")
+        self._vis_enabled = QCheckBox(t("win.chk_vis_enabled"))
         self._vis_enabled.setChecked(vis_cfg.get("enabled", False))
         tail.addWidget(self._vis_enabled)
 
         row_vkey = QHBoxLayout(); row_vkey.setSpacing(12)
-        lbl_vkey = QLabel("API Key"); lbl_vkey.setObjectName("field"); lbl_vkey.setFixedWidth(110)
+        lbl_vkey = QLabel(t("win.f_api_key")); lbl_vkey.setObjectName("field"); lbl_vkey.setFixedWidth(110)
         self._vis_key = QLineEdit(); self._vis_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._vis_key.setPlaceholderText("API key del provider (vuoto se locale)")
+        self._vis_key.setPlaceholderText(t("win.ph_vis_key"))
         self._vis_key.setText(vis_cfg.get("api_key", ""))
         row_vkey.addWidget(lbl_vkey); row_vkey.addWidget(self._vis_key); tail.addLayout(row_vkey)
 
         row_vurl = QHBoxLayout(); row_vurl.setSpacing(12)
-        lbl_vurl = QLabel("Base URL"); lbl_vurl.setObjectName("field"); lbl_vurl.setFixedWidth(110)
+        lbl_vurl = QLabel(t("win.f_base_url")); lbl_vurl.setObjectName("field"); lbl_vurl.setFixedWidth(110)
         self._vis_url = QLineEdit()
         default_vurl = getattr(_cfg, "AI_VISION_BASE_URL_DEFAULT", "")
-        self._vis_url.setPlaceholderText("es. http://localhost:11434/v1  oppure  https://tuo-provider/v1")
+        self._vis_url.setPlaceholderText(t("win.ph_url"))
         vurl_val = vis_cfg.get("base_url", "")
         if vurl_val and vurl_val != default_vurl:
             self._vis_url.setText(vurl_val)
@@ -595,7 +588,7 @@ class SettingsDialog(QDialog):
         ]))
 
         row_vmodel = QHBoxLayout(); row_vmodel.setSpacing(12)
-        lbl_vmodel = QLabel("Modello"); lbl_vmodel.setObjectName("field"); lbl_vmodel.setFixedWidth(110)
+        lbl_vmodel = QLabel(t("win.f_model")); lbl_vmodel.setObjectName("field"); lbl_vmodel.setFixedWidth(110)
         self._vis_model = QComboBox()
         self._vis_model.setEditable(True)  # qualsiasi modello vision, anche non in lista
         vmodels = getattr(_cfg, "AI_VISION_MODELS", ["gemini-2.0-flash-exp"])
@@ -607,25 +600,20 @@ class SettingsDialog(QDialog):
             self._vis_model.setCurrentIndex(idx_vm)
         else:
             self._vis_model.setCurrentText(cur_vmodel)
-        self._vis_detect_btn = QPushButton("Rileva"); self._vis_detect_btn.setObjectName("accent")
+        self._vis_detect_btn = QPushButton(t("win.btn_detect")); self._vis_detect_btn.setObjectName("accent")
         self._vis_detect_btn.setFixedHeight(38); self._vis_detect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._vis_detect_btn.setToolTip("Rileva i modelli vision disponibili sull'endpoint")
+        self._vis_detect_btn.setToolTip(t("win.tip_vis_detect"))
         self._vis_detect_btn.clicked.connect(self._detect_vision_models)
         row_vmodel.addWidget(lbl_vmodel); row_vmodel.addWidget(self._vis_model, stretch=1)
         row_vmodel.addWidget(self._vis_detect_btn); tail.addLayout(row_vmodel)
 
-        vis_hint = QLabel(
-            "Richiede un modello multimodale su endpoint OpenAI-compatibile. "
-            "In locale (es. llava o llama3.2-vision su Ollama) l'immagine non lascia il PC e "
-            "l'API Key non serve; con un provider cloud l'immagine viene inviata online. "
-            "I modelli consigliati sono nel README."
-        )
+        vis_hint = QLabel(t("win.vis_hint"))
         vis_hint.setObjectName("caption"); vis_hint.setWordWrap(True)
         vis_hint.setOpenExternalLinks(True)
         tail.addWidget(vis_hint)
 
         vtest_row = QHBoxLayout(); vtest_row.setSpacing(10)
-        self._vis_test_btn = QPushButton("Prova Vision"); self._vis_test_btn.setObjectName("accent")
+        self._vis_test_btn = QPushButton(t("win.btn_test_vision")); self._vis_test_btn.setObjectName("accent")
         self._vis_test_btn.setFixedHeight(34); self._vis_test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._vis_test_btn.clicked.connect(self._test_vision_connection)
         vtest_row.addWidget(self._vis_test_btn)
@@ -650,7 +638,7 @@ class SettingsDialog(QDialog):
             "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
         )
         ai_scroll.setWidget(t_ai)
-        tabs.addTab(ai_scroll, "AI")
+        tabs.addTab(ai_scroll, t("win.tab_ai"))
 
         # ── Tab Info ────────────────────────────────────────────
         t_info = QWidget(); t_info.setStyleSheet("background:transparent;")
@@ -661,7 +649,7 @@ class SettingsDialog(QDialog):
             n_au = c.execute("SELECT COUNT(*) FROM audio_segments").fetchone()[0]
             conn.close()
         except Exception: n_ss = n_au = "N/A"
-        info_sec = QLabel("ARCHIVIO"); info_sec.setObjectName("section"); til.addWidget(info_sec)
+        info_sec = QLabel(t("win.sec_archive")); info_sec.setObjectName("section"); til.addWidget(info_sec)
 
         def _stat_row(name, value):
             row = QHBoxLayout(); row.setSpacing(12)
@@ -669,18 +657,18 @@ class SettingsDialog(QDialog):
             v = QLabel(str(value)); v.setStyleSheet("color:#f4f4f7; background:transparent; font-size:15px; font-weight:700;")
             row.addWidget(k); row.addStretch(); row.addWidget(v)
             return row
-        til.addLayout(_stat_row("Screenshot salvati", n_ss))
-        til.addLayout(_stat_row("Segmenti audio", n_au))
-        til.addLayout(_stat_row("Database", "deja.db"))
-        til.addStretch(); tabs.addTab(t_info, "Info")
+        til.addLayout(_stat_row(t("win.stat_screens_saved"), n_ss))
+        til.addLayout(_stat_row(t("win.stat_audio_segments"), n_au))
+        til.addLayout(_stat_row(t("win.stat_database"), "deja.db"))
+        til.addStretch(); tabs.addTab(t_info, t("win.tab_info"))
 
         # ── Footer ──────────────────────────────────────────────
         foot_sep = QFrame(); foot_sep.setFrameShape(QFrame.Shape.HLine)
         foot_sep.setStyleSheet("background:rgba(255,255,255,0.07); max-height:1px; min-height:1px; border:none;")
         root.addWidget(foot_sep)
         footer = QHBoxLayout(); footer.setContentsMargins(24, 14, 24, 16); footer.setSpacing(10)
-        close_btn = QPushButton("Annulla"); close_btn.clicked.connect(self.reject)
-        save_btn = QPushButton("Salva impostazioni"); save_btn.setObjectName("save_btn")
+        close_btn = QPushButton(t("win.btn_cancel")); close_btn.clicked.connect(self.reject)
+        save_btn = QPushButton(t("win.btn_save_settings")); save_btn.setObjectName("save_btn")
         save_btn.clicked.connect(self._save_and_close)
         footer.addStretch(); footer.addWidget(close_btn); footer.addWidget(save_btn)
         root.addLayout(footer)
@@ -700,7 +688,7 @@ class SettingsDialog(QDialog):
         key  = self._ai_key.text().strip()
         if key or ai_assistant.is_local_endpoint(base):
             self._ai_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
-            self._ai_test_status.setText("rilevo modelli…")
+            self._ai_test_status.setText(t("win.status_detecting"))
             self._ai_models_worker = ModelsWorker(base, key)
             self._ai_models_worker.done.connect(self._on_ai_models_detected)
             self._ai_models_worker.start()
@@ -709,7 +697,7 @@ class SettingsDialog(QDialog):
             vkey  = self._vis_key.text().strip()
             if vkey or ai_assistant.is_local_endpoint(vbase):
                 self._vis_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
-                self._vis_test_status.setText("rilevo modelli…")
+                self._vis_test_status.setText(t("win.status_detecting"))
                 self._vis_models_worker = ModelsWorker(vbase, vkey)
                 self._vis_models_worker.done.connect(self._on_vis_models_detected)
                 self._vis_models_worker.start()
@@ -719,7 +707,7 @@ class SettingsDialog(QDialog):
             if ok and isinstance(res, list) and res:
                 self._populate_combo_models(self._ai_model, res)
                 self._ai_test_status.setStyleSheet(f"color:{C_SS_HEX}; background:transparent;")
-                self._ai_test_status.setText(f"✓ {len(res)} modelli disponibili")
+                self._ai_test_status.setText(t("win.status_n_available", n=len(res)))
             else:
                 self._ai_test_status.setText("")  # fallimento silenzioso
         except RuntimeError:
@@ -730,7 +718,7 @@ class SettingsDialog(QDialog):
             if ok and isinstance(res, list) and res:
                 self._populate_combo_models(self._vis_model, res)
                 self._vis_test_status.setStyleSheet(f"color:{C_SS_HEX}; background:transparent;")
-                self._vis_test_status.setText(f"✓ {len(res)} modelli disponibili")
+                self._vis_test_status.setText(t("win.status_n_available", n=len(res)))
             else:
                 self._vis_test_status.setText("")
         except RuntimeError:
@@ -747,7 +735,7 @@ class SettingsDialog(QDialog):
             pass
         self._ai_test_btn.setEnabled(False)
         self._ai_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
-        self._ai_test_status.setText("⏳ test in corso…")
+        self._ai_test_status.setText(t("win.status_test_running"))
         QApplication.processEvents()
         try:
             ok, msg = ai_assistant.test_connection()
@@ -773,7 +761,7 @@ class SettingsDialog(QDialog):
             pass
         self._vis_test_btn.setEnabled(False)
         self._vis_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
-        self._vis_test_status.setText("⏳ test vision in corso…")
+        self._vis_test_status.setText(t("win.status_vis_test_running"))
         QApplication.processEvents()
         try:
             from modules import ask_screen as _ask_mod
@@ -824,7 +812,7 @@ class SettingsDialog(QDialog):
         key  = self._ai_key.text().strip()
         self._ai_detect_btn.setEnabled(False)
         self._ai_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
-        self._ai_test_status.setText("⏳ rilevo modelli…")
+        self._ai_test_status.setText(t("win.status_detecting2"))
         QApplication.processEvents()
         try:
             ok, res = ai_assistant.list_models(base_url=base, api_key=key)
@@ -833,7 +821,7 @@ class SettingsDialog(QDialog):
         if ok:
             self._populate_combo_models(self._ai_model, res)
             self._ai_test_status.setStyleSheet(f"color:{C_SS_HEX}; background:transparent;")
-            self._ai_test_status.setText(f"✓ {len(res)} modelli rilevati")
+            self._ai_test_status.setText(t("win.status_n_detected", n=len(res)))
         else:
             self._ai_test_status.setStyleSheet("color:#ef4444; background:transparent;")
             self._ai_test_status.setText("✗ " + str(res))
@@ -844,7 +832,7 @@ class SettingsDialog(QDialog):
         key  = self._vis_key.text().strip()
         self._vis_detect_btn.setEnabled(False)
         self._vis_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
-        self._vis_test_status.setText("⏳ rilevo modelli…")
+        self._vis_test_status.setText(t("win.status_detecting2"))
         QApplication.processEvents()
         try:
             ok, res = ai_assistant.list_models(base_url=base, api_key=key)
@@ -853,7 +841,7 @@ class SettingsDialog(QDialog):
         if ok:
             self._populate_combo_models(self._vis_model, res)
             self._vis_test_status.setStyleSheet(f"color:{C_SS_HEX}; background:transparent;")
-            self._vis_test_status.setText(f"✓ {len(res)} modelli rilevati")
+            self._vis_test_status.setText(t("win.status_n_detected", n=len(res)))
         else:
             self._vis_test_status.setStyleSheet("color:#ef4444; background:transparent;")
             self._vis_test_status.setText("✗ " + str(res))
@@ -1513,7 +1501,7 @@ class AIAnswerCard(QWidget):
         head.addWidget(self._toggle)
         v.addLayout(head)
 
-        self._text = QLabel("Sto leggendo i tuoi ricordi…")
+        self._text = QLabel(t("win.sum_reading"))
         self._text.setWordWrap(True)
         self._text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self._text.setFont(QFont("Segoe UI", 11))
@@ -1561,8 +1549,8 @@ class AIAnswerCard(QWidget):
         self.update()
 
     def show_loading(self, query=""):
-        self._text.setText("Sto leggendo i tuoi ricordi…" + (f"  «{query[:40]}»" if query else ""))
-        self._badge.setText("✦  Déjà · elaborazione")
+        self._text.setText(t("win.sum_reading") + (f"  «{query[:40]}»" if query else ""))
+        self._badge.setText(t("win.sum_proc"))
         if self._collapsed: self._expand()
         self._loading = True
         self._shimmer_pos = 0.0
@@ -1572,8 +1560,8 @@ class AIAnswerCard(QWidget):
     def set_answer(self, text):
         self._loading = False
         self._shimmer_timer.stop()
-        self._badge.setText("✦  Déjà · sintesi")
-        self._text.setText(text or "Nessuna risposta.")
+        self._badge.setText(t("win.sum_synth"))
+        self._text.setText(text or t("win.sum_no_answer"))
         self.update()
 
     def reset(self):
@@ -1725,7 +1713,7 @@ class EmbedScreenshotCard(_EmbedCardBase):
 
         # Info
         info_lay = QVBoxLayout(); info_lay.setContentsMargins(0, 4, 0, 4); info_lay.setSpacing(2)
-        head = QLabel(f"📸  Screenshot")
+        head = QLabel(f"📸  {t('win.card_screenshot')}")
         head.setStyleSheet(f"color:{C_SS_HEX}; background:transparent; font-size:9px; font-weight:700; letter-spacing:1px;")
         info_lay.addWidget(head)
 
@@ -1785,13 +1773,13 @@ class EmbedAudioCard(_EmbedCardBase):
 
         # Info
         info_lay = QVBoxLayout(); info_lay.setContentsMargins(0, 4, 0, 4); info_lay.setSpacing(2)
-        src_lbl = QLabel(f"🎙️  {'Microfono' if src == 'mic' else 'Sistema'}  ·  {_human_ago(ts)}")
+        src_lbl = QLabel(f"🎙️  {t('win.card_mic') if src == 'mic' else t('win.card_system')}  ·  {_human_ago(ts)}")
         src_lbl.setStyleSheet(f"color:{C_AUDIO_HEX}; background:transparent; font-size:9px; font-weight:700; letter-spacing:1px;")
         info_lay.addWidget(src_lbl)
 
         snippet = transcript.replace("\n", " ").strip()
         snippet = snippet if len(snippet) <= 80 else snippet[:77] + "…"
-        tr_lbl = QLabel(snippet or "(senza testo)")
+        tr_lbl = QLabel(snippet or t("win.card_no_text"))
         tr_lbl.setFont(QFont("Segoe UI", 10))
         tr_lbl.setStyleSheet("color:#e6e6ec; background:transparent;")
         tr_lbl.setWordWrap(False)
@@ -1864,11 +1852,11 @@ class ChatPage(QWidget):
 
         # Header
         head = QHBoxLayout(); head.setSpacing(10)
-        title = QLabel("Déjà · Assistente AI")
+        title = QLabel(t("win.chat_title"))
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C_AI_HEX}; background:transparent; letter-spacing:1px;")
         head.addWidget(title); head.addStretch()
-        self.new_chat_btn = QPushButton("Nuova chat")
+        self.new_chat_btn = QPushButton(t("win.chat_new"))
         self.new_chat_btn.setFixedHeight(28); self.new_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_chat_btn.setStyleSheet(SS_BTN_OFF)
         head.addWidget(self.new_chat_btn)
@@ -1902,12 +1890,12 @@ class ChatPage(QWidget):
         es_icon.setFont(QFont("Segoe UI", 28))
         es_icon.setStyleSheet(f"color:{C_AI_HEX}; background:transparent;")
         es.addWidget(es_icon)
-        es_t = QLabel("Chiedimi qualsiasi cosa sui tuoi ricordi")
+        es_t = QLabel(t("win.chat_empty_title"))
         es_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         es_t.setFont(QFont("Segoe UI", 13, QFont.Weight.Medium))
         es_t.setStyleSheet("color:#e5e7eb; background:transparent;")
         es.addWidget(es_t)
-        es_s = QLabel("Cerco io nei tuoi screenshot e audio.\nProva: \"cosa ho fatto oggi?\" o \"di cosa ho parlato ieri?\"")
+        es_s = QLabel(t("win.chat_empty_sub"))
         es_s.setAlignment(Qt.AlignmentFlag.AlignCenter)
         es_s.setFont(QFont("Segoe UI", 10))
         es_s.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; line-height:1.6;")
@@ -1917,7 +1905,7 @@ class ChatPage(QWidget):
         # Input row
         input_row = QHBoxLayout(); input_row.setSpacing(8)
         self.input = QLineEdit()
-        self.input.setPlaceholderText("Scrivi un messaggio…")
+        self.input.setPlaceholderText(t("win.chat_placeholder"))
         self.input.setFont(QFont("Segoe UI", 11))
         self.input.setFixedHeight(38)
         self.input.setStyleSheet(
@@ -1931,12 +1919,12 @@ class ChatPage(QWidget):
         # Mic button (voice input)
         self.mic_btn = QPushButton("🎙")
         self.mic_btn.setFixedSize(38, 38); self.mic_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.mic_btn.setToolTip("Detta messaggio (Ctrl+M)")
+        self.mic_btn.setToolTip(t("win.chat_mic_tip"))
         self.mic_btn.setCheckable(True)
         self._set_mic_style(False)
         input_row.addWidget(self.mic_btn)
 
-        self.send_btn = QPushButton("Invia"); self.send_btn.setFixedHeight(38); self.send_btn.setFixedWidth(80)
+        self.send_btn = QPushButton(t("win.chat_send")); self.send_btn.setFixedHeight(38); self.send_btn.setFixedWidth(80)
         self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_btn.setStyleSheet(SS_BTN_AI_PRIMARY)
         self.send_btn.clicked.connect(self._on_send)
@@ -2034,14 +2022,14 @@ class ChatPage(QWidget):
     def set_busy(self, busy):
         self.input.setEnabled(not busy)
         self.send_btn.setEnabled(not busy)
-        self.send_btn.setText("…" if busy else "Invia")
+        self.send_btn.setText("…" if busy else t("win.chat_send"))
 
 
 # ── Diary dialog (daily summaries AI) ─────────────────────────────
 class DiaryDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Diario — Déjà")
+        self.setWindowTitle(t("win.diary_title"))
         self.setMinimumSize(720, 560)
         # Sopra l'overlay stays-on-top, altrimenti finisce dietro.
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
@@ -2050,7 +2038,7 @@ class DiaryDialog(QDialog):
         root = QVBoxLayout(self); root.setContentsMargins(20, 18, 20, 16); root.setSpacing(12)
 
         head = QHBoxLayout(); head.setSpacing(8)
-        title = QLabel("📖  Diario")
+        title = QLabel(t("win.diary_header"))
         title.setFont(QFont("Segoe UI", 14, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C_AI_HEX}; background:transparent; letter-spacing:1px;")
         head.addWidget(title); head.addStretch()
@@ -2111,7 +2099,7 @@ class DiaryDialog(QDialog):
         root.addLayout(body, stretch=1)
 
         foot = QHBoxLayout(); foot.addStretch()
-        close_btn = QPushButton("Chiudi"); close_btn.setFixedHeight(34); close_btn.setStyleSheet(SS_BTN_OFF)
+        close_btn = QPushButton(t("win.diary_close")); close_btn.setFixedHeight(34); close_btn.setStyleSheet(SS_BTN_OFF)
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor); close_btn.clicked.connect(self.accept)
         foot.addWidget(close_btn)
         root.addLayout(foot)
@@ -2131,10 +2119,7 @@ class DiaryDialog(QDialog):
         if summaries:
             self.day_list.setCurrentRow(0)
         else:
-            self.content_label.setText(
-                "<i style='color:#8b8d98;'>Nessun diario salvato.<br><br>"
-                "Clicca <b>✨ Genera oggi</b> per creare il riepilogo della giornata.</i>"
-            )
+            self.content_label.setText(t("win.diary_empty"))
 
     def _on_day_changed(self, row):
         item = self.day_list.item(row)
@@ -2145,7 +2130,7 @@ class DiaryDialog(QDialog):
         except Exception as e:
             self.content_label.setText(f"⚠ {e}"); return
         if not s:
-            self.content_label.setText("⚠ Diario non trovato"); return
+            self.content_label.setText(t("win.diary_not_found")); return
         self.content_label.setText(_md_to_html(s["content"]))
 
     def _generate_selected(self):
@@ -2157,12 +2142,12 @@ class DiaryDialog(QDialog):
         self._gen_thread.start()
 
     def _on_gen_done(self, ok, content_or_err, day_iso):
-        self.gen_btn.setEnabled(True); self.gen_btn.setText("✨ Genera")
+        self.gen_btn.setEnabled(True); self.gen_btn.setText(t("win.diary_generate"))
         if ok:
             try:
                 ai_assistant.save_daily_summary(day_iso, content_or_err)
             except Exception as e:
-                self.content_label.setText(f"⚠ Errore salvataggio: {e}"); return
+                self.content_label.setText(t("win.diary_save_error", e=e)); return
             self._refresh_list()
             # Seleziona quello appena generato
             for i in range(self.day_list.count()):
@@ -2189,18 +2174,18 @@ class ContextDialog(QDialog):
     """Mostra ricordi ±N min attorno a un timestamp pivot."""
     def __init__(self, pivot_ts, pivot_label, parent=None, window_min=5):
         super().__init__(parent)
-        self.setWindowTitle("Contesto temporale — Déjà")
+        self.setWindowTitle(t("win.ctx_title"))
         self.setMinimumSize(520, 520)
         self.setStyleSheet(f"QDialog{{background:{BG_HEX};}}")
 
         root = QVBoxLayout(self); root.setContentsMargins(20, 18, 20, 16); root.setSpacing(10)
 
-        title = QLabel(f"🔗  Contesto ±{window_min} min")
+        title = QLabel(t("win.ctx_header", min=window_min))
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C_AI_HEX}; background:transparent; letter-spacing:0.5px;")
         root.addWidget(title)
 
-        sub = QLabel(f"Intorno a: {pivot_label}")
+        sub = QLabel(t("win.ctx_around", label=pivot_label))
         sub.setFont(QFont("Segoe UI", 10))
         sub.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
         sub.setWordWrap(True)
@@ -2252,7 +2237,7 @@ class ContextDialog(QDialog):
         events.sort(key=lambda e: e[2])
 
         if not events:
-            empty = QLabel("Nessun evento in questa finestra temporale.")
+            empty = QLabel(t("win.ctx_empty"))
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet(f"color:{TEXT_SECONDARY}; padding:30px;")
             v.addWidget(empty)
@@ -2262,7 +2247,7 @@ class ContextDialog(QDialog):
             v.addStretch()
 
         # Footer close
-        close_btn = QPushButton("Chiudi"); close_btn.setFixedHeight(34)
+        close_btn = QPushButton(t("win.ctx_close")); close_btn.setFixedHeight(34)
         close_btn.setStyleSheet(SS_BTN_OFF); close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.clicked.connect(self.accept)
         foot = QHBoxLayout(); foot.addStretch(); foot.addWidget(close_btn)
@@ -2285,8 +2270,8 @@ class ContextDialog(QDialog):
         h.addWidget(icon_lbl)
 
         info = QVBoxLayout(); info.setContentsMargins(0, 0, 0, 0); info.setSpacing(2)
-        head = QLabel(f"<b style='color:{accent_hex};'>{('Audio' if is_audio else 'Screenshot')}</b>  "
-                      f"<span style='color:#8b8d98;'>· {_human_ago(ts)} · {(src if not is_audio else ('Microfono' if src == 'mic' else 'Sistema'))}</span>")
+        head = QLabel(f"<b style='color:{accent_hex};'>{(t('win.card_audio') if is_audio else t('win.card_screenshot'))}</b>  "
+                      f"<span style='color:#8b8d98;'>· {_human_ago(ts)} · {(src if not is_audio else (t('win.card_mic') if src == 'mic' else t('win.card_system')))}</span>")
         head.setStyleSheet("background:transparent; border:none; font-size:10px;")
         head.setTextFormat(Qt.TextFormat.RichText)
         info.addWidget(head)
@@ -2309,7 +2294,7 @@ class FullscreenViewer(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(32, 24, 32, 24); lay.setSpacing(8)
 
-        for txt, size, color in [(info, 12, "#ffffff"), ("Premi ESC per chiudere", 9, TEXT_SECONDARY)]:
+        for txt, size, color in [(info, 12, "#ffffff"), (t("win.fs_press_esc"), 9, TEXT_SECONDARY)]:
             lbl = QLabel(txt)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setFont(QFont("Segoe UI", size, QFont.Weight.Medium))
@@ -2451,7 +2436,7 @@ class AskScreenDialog(QDialog):
         self._answer_buf = []
         self._closing = False
 
-        self.setWindowTitle("Chiedi allo schermo — Déjà")
+        self.setWindowTitle(t("win.ask_title"))
         self.setMinimumSize(720, 620)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -2469,7 +2454,7 @@ class AskScreenDialog(QDialog):
 
         # Header
         head = QHBoxLayout(); head.setSpacing(8)
-        title = QLabel("👁  Chiedi allo schermo")
+        title = QLabel(t("win.ask_header"))
         title.setFont(QFont("Segoe UI", 13, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C_AI_HEX}; background:transparent; letter-spacing:0.5px;")
         head.addWidget(title)
@@ -2507,20 +2492,20 @@ class AskScreenDialog(QDialog):
             self.thumb_label.setPixmap(scaled)
             self.thumb_label.setFixedHeight(min(scaled.height() + 16, 240))
         else:
-            self.thumb_label.setText("[anteprima non disponibile]")
+            self.thumb_label.setText(t("win.ask_preview_unavail"))
             self.thumb_label.setFixedHeight(60)
         root.addWidget(self.thumb_label)
 
         # OCR preview info
         ocr_len = len((snap.get("text") or "").strip())
-        info = QLabel(f"OCR: {ocr_len} caratteri estratti")
+        info = QLabel(t("win.ask_ocr_chars", n=ocr_len))
         info.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; font-size:9pt;")
         root.addWidget(info)
 
         # Question input
         in_row = QHBoxLayout(); in_row.setSpacing(8)
         self.question = QLineEdit()
-        self.question.setPlaceholderText("Cosa vuoi sapere? (es. spiega questo errore, riassumi, traduci…)")
+        self.question.setPlaceholderText(t("win.ask_question_ph"))
         self.question.setStyleSheet(
             "QLineEdit{background:rgba(255,255,255,0.04); color:#f3f4f6; "
             "border:1px solid rgba(255,255,255,0.10); border-radius:8px; "
@@ -2530,7 +2515,7 @@ class AskScreenDialog(QDialog):
         self.question.returnPressed.connect(self._on_send)
         in_row.addWidget(self.question, stretch=1)
 
-        self.send_btn = QPushButton("Chiedi")
+        self.send_btn = QPushButton(t("win.ask_ask"))
         self.send_btn.setFixedHeight(38); self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.send_btn.setStyleSheet(SS_BTN_AI_PRIMARY)
         self.send_btn.clicked.connect(self._on_send)
@@ -2553,10 +2538,7 @@ class AskScreenDialog(QDialog):
         self.answer_label.setStyleSheet("color:#e6e6ec; background:transparent; padding:14px;")
         self.answer_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.answer_label.setTextFormat(Qt.TextFormat.RichText)
-        self.answer_label.setText(
-            "<i style='color:#8b8d98;'>Scrivi una domanda e premi Invio. "
-            "L'AI risponderà basandosi su ciò che vedi adesso.</i>"
-        )
+        self.answer_label.setText(t("win.ask_answer_ph"))
         self.answer_scroll.setWidget(self.answer_label)
         root.addWidget(self.answer_scroll, stretch=1)
 
@@ -2565,7 +2547,7 @@ class AskScreenDialog(QDialog):
         self.status_lbl = QLabel("")
         self.status_lbl.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; font-size:9pt;")
         foot.addWidget(self.status_lbl); foot.addStretch()
-        hint = QLabel("Esc per chiudere · Invio per chiedere")
+        hint = QLabel(t("win.ask_hint"))
         hint.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; font-size:9pt;")
         foot.addWidget(hint)
         root.addLayout(foot)
@@ -2604,14 +2586,11 @@ class AskScreenDialog(QDialog):
         except Exception:
             vision_ok = False
         if not vision_ok and not ai_assistant.is_configured():
-            self.answer_label.setText(
-                "<span style='color:#ef4444;'>⚠ Nessuna AI configurata. "
-                "Vai in Impostazioni → AI (text o Vision).</span>"
-            )
+            self.answer_label.setText(t("win.ask_no_ai"))
             return
         self.send_btn.setEnabled(False); self.send_btn.setText("⏳")
         self.question.setEnabled(False)
-        self.status_lbl.setText("AI sta pensando…")
+        self.status_lbl.setText(t("win.ask_thinking"))
         self._answer_buf = []
         self.answer_label.setText("")
         self._worker = _AskScreenWorker(q, self._snap)
@@ -2635,9 +2614,9 @@ class AskScreenDialog(QDialog):
             )
 
     def _on_done(self):
-        self.send_btn.setEnabled(True); self.send_btn.setText("Chiedi")
+        self.send_btn.setEnabled(True); self.send_btn.setText(t("win.ask_ask"))
         self.question.setEnabled(True); self.question.setFocus()
-        self.status_lbl.setText("✓ Risposta completa")
+        self.status_lbl.setText(t("win.ask_complete"))
 
     def closeEvent(self, e):
         self._closing = True
@@ -2821,7 +2800,7 @@ class DejaWindow(QWidget):
         ic = _SearchIcon(); ic.setFixedSize(28, 28); sl.addWidget(ic)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Cerca nei tuoi ricordi…")
+        self.search_input.setPlaceholderText(t("win.main_search_ph"))
         self.search_input.setFont(QFont("Segoe UI", 16, QFont.Weight.Normal))
         self.search_input.setStyleSheet(
             f"QLineEdit{{border:none; background:transparent; color:{TEXT_PRIMARY}; "
@@ -2847,7 +2826,7 @@ class DejaWindow(QWidget):
         self._refresh_search_completer()
         sl.addWidget(self.search_input)
 
-        self.kbd = QLabel("↵  Invio"); self.kbd.setFixedHeight(24)
+        self.kbd = QLabel(t("win.main_enter")); self.kbd.setFixedHeight(24)
         self.kbd.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.kbd.setContentsMargins(8, 0, 8, 0)
         self.kbd.setStyleSheet(
@@ -2857,12 +2836,12 @@ class DejaWindow(QWidget):
         )
         self.kbd.hide(); sl.addWidget(self.kbd)
 
-        self.all_btn = QPushButton("Esplora"); self.all_btn.setFixedHeight(30); self.all_btn.setFixedWidth(84)
+        self.all_btn = QPushButton(t("win.main_explore")); self.all_btn.setFixedHeight(30); self.all_btn.setFixedWidth(84)
         self.all_btn.setStyleSheet(SS_BTN_OFF)
         self.all_btn.clicked.connect(self._show_all); self.all_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         sl.addWidget(self.all_btn)
 
-        self.chat_btn = QPushButton("Chat"); self.chat_btn.setFixedHeight(30); self.chat_btn.setFixedWidth(72)
+        self.chat_btn = QPushButton(t("win.main_chat")); self.chat_btn.setFixedHeight(30); self.chat_btn.setFixedWidth(72)
         self.chat_btn.setStyleSheet(SS_BTN_OFF); self.chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.chat_btn.clicked.connect(self._show_chat)
         sl.addWidget(self.chat_btn)
@@ -2883,7 +2862,7 @@ class DejaWindow(QWidget):
         self.date_bar = QWidget(); self.date_bar.setFixedHeight(34); self.date_bar.setStyleSheet("background:transparent;")
         dl = QHBoxLayout(self.date_bar); dl.setContentsMargins(24, 0, 24, 0); dl.setSpacing(12)
         self._dbtn = {}
-        for lbl, key in [("Oggi", "today"), ("Ieri", "yesterday"), ("7 giorni", "week"), ("Tutto", "all")]:
+        for lbl, key in [(t("win.sb_today"), "today"), (t("win.sb_yesterday"), "yesterday"), (t("win.sb_week"), "week"), (t("win.sb_all"), "all")]:
             b = QPushButton(lbl); b.setFixedHeight(28); b.setCursor(Qt.CursorShape.PointingHandCursor)
             force_style(b, date_pill(key == "all")); b.clicked.connect(lambda _, k=key: self._apply_date_filter(k))
             self._dbtn[key] = b; dl.addWidget(b)
@@ -2909,7 +2888,7 @@ class DejaWindow(QWidget):
         sb_title.setStyleSheet(f"color:#f3f4f6; background:transparent; letter-spacing:5px;")
         sb_title.setAlignment(Qt.AlignmentFlag.AlignCenter); sb_layout.addWidget(sb_title)
 
-        sb_sub = QLabel("memoria digitale"); sb_sub.setFont(QFont("Segoe UI", 8))
+        sb_sub = QLabel(t("win.sb_subtitle")); sb_sub.setFont(QFont("Segoe UI", 8))
         sb_sub.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; letter-spacing:3px;")
         sb_sub.setAlignment(Qt.AlignmentFlag.AlignCenter); sb_layout.addWidget(sb_sub)
 
@@ -2949,11 +2928,11 @@ class DejaWindow(QWidget):
                 "QPushButton:hover{background:rgba(255,255,255,0.10); color:#ffffff;}")
             return b
 
-        self._sb_export_btn = _sb_btn("Esporta ricordi", "📤", "Esporta tutto in JSON")
+        self._sb_export_btn = _sb_btn(t("win.sb_export"), "📤", t("win.sb_export_tip"))
         self._sb_export_btn.clicked.connect(self._export_memories)
         sb_layout.addWidget(self._sb_export_btn)
 
-        self._sb_clear_btn = _sb_btn("Svuota database", "🗑️", "Elimina tutti i dati")
+        self._sb_clear_btn = _sb_btn(t("win.sb_clear_label"), "🗑️", t("win.sb_clear_tip"))
         self._sb_clear_btn.clicked.connect(self._confirm_clear)
         self._sb_clear_btn.setStyleSheet(
             "QPushButton{background:rgba(239,68,68,0.08); color:#f87171; "
@@ -2961,11 +2940,11 @@ class DejaWindow(QWidget):
             "QPushButton:hover{background:rgba(239,68,68,0.18);}")
         sb_layout.addWidget(self._sb_clear_btn)
 
-        self._sb_pinned_btn = _sb_btn("Pinned", "⭐", "Mostra solo ricordi marcati con stella")
+        self._sb_pinned_btn = _sb_btn(t("win.sb_pinned"), "⭐", t("win.sb_pinned_tip"))
         self._sb_pinned_btn.clicked.connect(self._show_pinned)
         sb_layout.addWidget(self._sb_pinned_btn)
 
-        self._sb_date_btn = _sb_btn("Filtra date", "📅", "Range data custom")
+        self._sb_date_btn = _sb_btn(t("win.sb_date"), "📅", t("win.sb_date_tip"))
         self._sb_date_btn.clicked.connect(self._open_date_filter)
         sb_layout.addWidget(self._sb_date_btn)
 
@@ -2973,7 +2952,7 @@ class DejaWindow(QWidget):
         sb_sep_apps = QFrame(); sb_sep_apps.setFrameShape(QFrame.Shape.HLine)
         sb_sep_apps.setStyleSheet("background:rgba(255,255,255,0.06); max-height:1px;")
         sb_layout.addWidget(sb_sep_apps)
-        apps_lbl = QLabel("APP")
+        apps_lbl = QLabel(t("win.sb_apps"))
         apps_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         apps_lbl.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; letter-spacing:2px; padding-left:2px;")
         sb_layout.addWidget(apps_lbl)
@@ -3046,25 +3025,25 @@ class DejaWindow(QWidget):
         pv_layout.addWidget(self.preview_info)
 
         top_br = QHBoxLayout(); top_br.setSpacing(10)
-        self.fs_btn = QPushButton("Espandi"); self.fs_btn.setFixedHeight(34)
+        self.fs_btn = QPushButton(t("win.det_expand")); self.fs_btn.setFixedHeight(34)
         self.fs_btn.setEnabled(False); self.fs_btn.setStyleSheet(SS_BTN_OFF); self.fs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.fs_btn.clicked.connect(self._open_fullscreen); top_br.addWidget(self.fs_btn)
 
-        self.play_btn = QPushButton("Ascolta"); self.play_btn.setFixedHeight(34)
+        self.play_btn = QPushButton(t("win.det_listen")); self.play_btn.setFixedHeight(34)
         self.play_btn.setEnabled(False); self.play_btn.setStyleSheet(SS_BTN_OFF); self.play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.play_btn.clicked.connect(self._play_audio); top_br.addWidget(self.play_btn)
 
-        self.ctx_btn = QPushButton("🔗 Contesto"); self.ctx_btn.setFixedHeight(34)
+        self.ctx_btn = QPushButton(t("win.det_context")); self.ctx_btn.setFixedHeight(34)
         self.ctx_btn.setEnabled(False)
         self.ctx_btn.setStyleSheet(SS_BTN_OFF); self.ctx_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.ctx_btn.setToolTip("Mostra cosa accadeva intorno a questo ricordo (±5 min)")
+        self.ctx_btn.setToolTip(t("win.det_context_tip"))
         self.ctx_btn.clicked.connect(self._show_context)
         top_br.addWidget(self.ctx_btn)
 
         self.pin_btn = QPushButton("☆"); self.pin_btn.setFixedHeight(34); self.pin_btn.setFixedWidth(40)
         self.pin_btn.setEnabled(False); self.pin_btn.setStyleSheet(SS_BTN_OFF)
         self.pin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.pin_btn.setToolTip("Pinna/spinna ricordo")
+        self.pin_btn.setToolTip(t("win.det_pin_tip"))
         self.pin_btn.clicked.connect(self._toggle_pin)
         top_br.addWidget(self.pin_btn)
 
@@ -3073,7 +3052,7 @@ class DejaWindow(QWidget):
         # Tag row
         tag_row = QHBoxLayout(); tag_row.setSpacing(6)
         self.tag_input = QLineEdit()
-        self.tag_input.setPlaceholderText("Aggiungi tag (Enter)")
+        self.tag_input.setPlaceholderText(t("win.det_tag_ph"))
         self.tag_input.setFixedHeight(28)
         self.tag_input.setStyleSheet(
             "QLineEdit{background:rgba(255,255,255,0.03); color:#e5e7eb; "
@@ -3195,7 +3174,7 @@ class DejaWindow(QWidget):
         self.search_input.blockSignals(False)
 
     def _reset_all_btn(self):
-        self.all_btn.setText("Esplora"); self.all_btn.setFixedWidth(84); self.all_btn.setStyleSheet(SS_BTN_OFF)
+        self.all_btn.setText(t("win.main_explore")); self.all_btn.setFixedWidth(84); self.all_btn.setStyleSheet(SS_BTN_OFF)
         try: self.all_btn.clicked.disconnect()
         except Exception: pass
         self.all_btn.clicked.connect(self._show_all)
@@ -3237,7 +3216,7 @@ class DejaWindow(QWidget):
 
     def _search_from_image(self, path):
         try:
-            self.toast(f"OCR su {path.split('/')[-1].split(chr(92))[-1]}…", level="info", duration_ms=2000)
+            self.toast(t("win.toast_ocr_on", name=path.split('/')[-1].split(chr(92))[-1]), level="info", duration_ms=2000)
             QApplication.processEvents()
             import pytesseract
             from PIL import Image
@@ -3245,14 +3224,14 @@ class DejaWindow(QWidget):
             img = Image.open(path)
             text = pytesseract.image_to_string(img, lang=OCR_LANG).strip()
         except Exception as e:
-            self.toast(f"OCR fallito: {e}", level="error", duration_ms=4500)
+            self.toast(t("win.toast_ocr_fail", e=e), level="error", duration_ms=4500)
             return
         if not text:
-            self.toast("Nessun testo estratto dall'immagine", level="warn", duration_ms=3500)
+            self.toast(t("win.toast_no_text_img"), level="warn", duration_ms=3500)
             return
         # Prendi prime parole significative come query (max 80 char)
         snippet = " ".join(text.split())[:80]
-        self.toast(f"Cerco: {snippet[:50]}{'…' if len(snippet) > 50 else ''}", level="ok", duration_ms=2500)
+        self.toast(t("win.toast_searching", q=f"{snippet[:50]}{'…' if len(snippet) > 50 else ''}"), level="ok", duration_ms=2500)
         if not self.isVisible():
             self._center_on_screen(); self.show(); self.raise_(); self.activateWindow()
         self.search_input.setText(snippet)
@@ -3292,7 +3271,7 @@ class DejaWindow(QWidget):
             self._busy = False
 
     def _reset_chat_btn(self):
-        self.chat_btn.setText("Chat"); self.chat_btn.setFixedWidth(72); self.chat_btn.setStyleSheet(SS_BTN_OFF)
+        self.chat_btn.setText(t("win.main_chat")); self.chat_btn.setFixedWidth(72); self.chat_btn.setStyleSheet(SS_BTN_OFF)
         try: self.chat_btn.clicked.disconnect()
         except Exception: pass
         self.chat_btn.clicked.connect(self._show_chat)
@@ -3310,7 +3289,7 @@ class DejaWindow(QWidget):
         self._reset_chat_btn(); self.ai_card.reset()
         self.sep.show()
         self.status.setStyleSheet(f"color:{TEXT_SECONDARY};background:transparent;font-size:10px;font-weight:600;letter-spacing:1px;")
-        self.status.setText("RICERCA IN CORSO..."); self.status.show()
+        self.status.setText(t("win.st_searching")); self.status.show()
         self.date_bar.hide(); self.filter_bar.hide()
         self.results_list.blockSignals(True); self.results_list.clear(); self.results_list.blockSignals(False)
         self.preview_lbl.clear(); self.preview_lbl.setPixmap(QPixmap()); self.preview_info.setText("")
@@ -3332,7 +3311,7 @@ class DejaWindow(QWidget):
             self.preview_lbl.clear(); self.preview_lbl.setPixmap(QPixmap()); self.preview_info.setText("")
             self._set_action_btns("neutral"); self.sep.show(); self.status.show()
             self.status.setStyleSheet(f"color:#ef4444;background:transparent;font-size:10px;font-weight:600;letter-spacing:1px;")
-            self.status.setText("NESSUN RISULTATO TROVATO")
+            self.status.setText(t("win.st_no_results"))
             self.setFixedHeight(OVERLAY_H_COMPACT); self._animate_height(OVERLAY_H_COMPACT); self._redraw()
             return
         has_a = any(r.get("type") == "audio" for r in results); has_s = any(r.get("type") == "screenshot" for r in results)
@@ -3354,13 +3333,13 @@ class DejaWindow(QWidget):
         self._reset_chat_btn(); self.ai_card.reset()
         self._set_input(placeholder="Esplora la timeline...", ro=True, color=TEXT_SECONDARY)
         self.kbd.hide()
-        self.all_btn.setText("Chiudi"); self.all_btn.setFixedWidth(84)
+        self.all_btn.setText(t("win.main_close")); self.all_btn.setFixedWidth(84)
         self.all_btn.setStyleSheet(f"QPushButton{{background:rgba(255,255,255,0.1); color:#ffffff; border:1px solid {BORDER_STR}; border-radius:8px; font-size:12px; font-weight:600; padding:6px 14px;}} QPushButton:hover{{background:rgba(255,255,255,0.15);}}")
         try: self.all_btn.clicked.disconnect()
         except Exception: pass
         self.all_btn.clicked.connect(self._collapse)
         self.sep.show(); self.status.setStyleSheet(f"color:{TEXT_SECONDARY};background:transparent;font-size:10px;font-weight:600;letter-spacing:1px;")
-        self.status.setText("CARICAMENTO TIMELINE..."); self.status.show(); self.date_bar.show(); self._style_dpills()
+        self.status.setText(t("win.st_loading_timeline")); self.status.show(); self.date_bar.show(); self._style_dpills()
         self.filter_bar.hide(); self.results_list.blockSignals(True); self.results_list.clear(); self.results_list.blockSignals(False)
         self.preview_lbl.clear(); self.preview_lbl.setPixmap(QPixmap()); self.preview_info.setText("")
         self._set_action_btns("neutral"); self._preview_panel.set_border_kind("neutral")
@@ -3395,13 +3374,13 @@ class DejaWindow(QWidget):
         # interrompeva lo spinner, lasciando la schermata bloccata su DB grandi.
         if getattr(self, "_all_loading", False):
             self.status.setStyleSheet(f"color:{TEXT_SECONDARY};background:transparent;font-size:10px;font-weight:600;letter-spacing:1px;")
-            self.status.setText("CARICAMENTO TIMELINE..."); self.status.show()
+            self.status.setText(t("win.st_loading_timeline")); self.status.show()
             self._show_loading(); self._redraw()
             return
         if not self._all_results:
             self.loading_page.stop(); self.stack.hide()
             self.status.setStyleSheet(f"color:{TEXT_SECONDARY};background:transparent;font-size:10px;font-weight:600;letter-spacing:1px;")
-            self.status.setText("NESSUN ELEMENTO"); self._redraw()
+            self.status.setText(t("win.st_no_items")); self._redraw()
             return
         now = datetime.now(timezone.utc)
         if key == "today": cut = now.replace(hour=0, minute=0, second=0, microsecond=0); cut_end = None
@@ -3456,7 +3435,7 @@ class DejaWindow(QWidget):
             is_audio = r.get("type") == "audio"
             if is_audio:
                 transcript = r.get("transcript", "").strip()
-                title = (transcript[:40] + "…") if len(transcript) > 40 else (transcript or "Registrazione Audio")
+                title = (transcript[:40] + "…") if len(transcript) > 40 else (transcript or t("win.audio_fallback_title"))
             else:
                 app = r.get("app", "?")
                 title = app if len(app) <= 38 else app[:35] + "…"
@@ -3542,7 +3521,7 @@ class DejaWindow(QWidget):
                 self.preview_lbl.setPixmap(px.scaled(target_w, 500, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
                 self._preview_panel.set_border_kind("screenshot"); self._set_action_btns("screenshot")
             else:
-                self._current_pixmap = None; self.preview_lbl.setText("Immagine non disponibile")
+                self._current_pixmap = None; self.preview_lbl.setText(t("win.st_image_unavail"))
                 self._preview_panel.set_border_kind("neutral"); self._set_action_btns("neutral")
 
         if self._all_mode: self.sep.show(); self.status.show(); self.date_bar.show()
@@ -3587,9 +3566,9 @@ class DejaWindow(QWidget):
         md = "\n---\n\n".join(parts)
         try:
             QApplication.clipboard().setText(md)
-            self.toast(f"Copiati {len(items)} ricordi come markdown", level="ok")
+            self.toast(t("win.toast_copied", n=len(items)), level="ok")
         except Exception as e:
-            self.toast(f"Errore copia: {e}", level="error")
+            self.toast(t("win.toast_copy_err", e=e), level="error")
 
     def _toggle_pin(self):
         if not self._filtered: return
@@ -3606,9 +3585,9 @@ class DejaWindow(QWidget):
             set_pinned(kind, r["id"], new_state)
             r["pinned"] = new_state
             self._update_pin_btn(new_state)
-            self.toast(("⭐ Pinned" if new_state else "Unpinned"), level="ok", duration_ms=2000)
+            self.toast((t("win.toast_pinned") if new_state else t("win.toast_unpinned")), level="ok", duration_ms=2000)
         except Exception as e:
-            self.toast(f"Errore pin: {e}", level="error")
+            self.toast(t("win.toast_pin_err", e=e), level="error")
 
     def _update_pin_btn(self, pinned):
         if pinned:
@@ -3637,9 +3616,9 @@ class DejaWindow(QWidget):
             add_tag(kind, r["id"], name)
             self.tag_input.clear()
             self._refresh_tags_label(kind, r["id"])
-            self.toast(f"Tag aggiunto: {name}", level="ok", duration_ms=1800)
+            self.toast(t("win.toast_tag_added", name=name), level="ok", duration_ms=1800)
         except Exception as e:
-            self.toast(f"Errore tag: {e}", level="error")
+            self.toast(t("win.toast_tag_err", e=e), level="error")
 
     def _refresh_tags_label(self, kind, item_id):
         try:
@@ -3649,7 +3628,7 @@ class DejaWindow(QWidget):
                 html = "  ".join(f"<span style='background:rgba(167,139,250,0.15); padding:1px 7px; border-radius:8px; color:#c4b5fd;'>#{t}</span>" for t in tags)
                 self.tags_label.setText(html)
             else:
-                self.tags_label.setText("<span style='color:#5a5d6a;'>nessun tag</span>")
+                self.tags_label.setText(f"<span style='color:#5a5d6a;'>{t('win.det_no_tags')}</span>")
         except Exception:
             self.tags_label.setText("")
 
@@ -3673,7 +3652,7 @@ class DejaWindow(QWidget):
         self._is_playing = True
         sd.play(self._audio_data[offset_samples:], samplerate=16000)
         self._playback_timer.start()
-        self.play_btn.setText("⏹  Stop"); self.play_btn.setStyleSheet(SS_BTN_AUDIO_ON)
+        self.play_btn.setText(t("win.det_stop")); self.play_btn.setStyleSheet(SS_BTN_AUDIO_ON)
         try: self.play_btn.clicked.disconnect()
         except Exception: pass
         self.play_btn.clicked.connect(self._stop_audio)
@@ -3694,7 +3673,7 @@ class DejaWindow(QWidget):
 
     def _on_playback_finished(self):
         self._playback_timer.stop(); self._is_playing = False
-        self.play_btn.setText("▶  Ascolta"); self.play_btn.setStyleSheet(SS_BTN_AUDIO_ON)
+        self.play_btn.setText(t("win.det_listen2")); self.play_btn.setStyleSheet(SS_BTN_AUDIO_ON)
         try: self.play_btn.clicked.disconnect()
         except Exception: pass
         self.play_btn.clicked.connect(self._play_audio)
@@ -3746,13 +3725,13 @@ class DejaWindow(QWidget):
         self._playback_timer.stop(); self._is_playing = False
         try: sd.stop()
         except Exception: pass
-        self.play_btn.setText("▶  Ascolta"); self.play_btn.setStyleSheet(SS_BTN_AUDIO_ON)
+        self.play_btn.setText(t("win.det_listen2")); self.play_btn.setStyleSheet(SS_BTN_AUDIO_ON)
         try: self.play_btn.clicked.disconnect()
         except Exception: pass
         self.play_btn.clicked.connect(self._play_audio)
 
     def _on_error(self, msg):
-        self.loading_page.stop(); self.stack.hide(); self.status.setText(f"ERRORE: {msg}"); self._redraw()
+        self.loading_page.stop(); self.stack.hide(); self.status.setText(t("win.st_error", msg=msg)); self._redraw()
 
     # ── Chat mode ───────────────────────────────────────────────────
     def _show_chat(self):
@@ -3763,7 +3742,7 @@ class DejaWindow(QWidget):
         self._set_input(placeholder="Modalità chat AI…", ro=True, color=TEXT_SECONDARY)
         self.kbd.hide()
 
-        self.chat_btn.setText("Chiudi"); self.chat_btn.setFixedWidth(80)
+        self.chat_btn.setText(t("win.main_close")); self.chat_btn.setFixedWidth(80)
         self.chat_btn.setStyleSheet(SS_BTN_AI_ON)
         try: self.chat_btn.clicked.disconnect()
         except Exception: pass
@@ -3780,9 +3759,7 @@ class DejaWindow(QWidget):
             self._chat_loaded = True
 
         if not ai_assistant.is_configured():
-            self.chat_page.add_notice(
-                "Configura la tua API key in Impostazioni → AI per iniziare a chattare."
-            )
+            self.chat_page.add_notice(t("win.chat_notice_config"))
             self.chat_page.set_busy(True)
         else:
             self.chat_page.set_busy(False)
@@ -3815,7 +3792,7 @@ class DejaWindow(QWidget):
         self._chat_turn_bubbles = []
         self.chat_page.clear_messages()
         if not ai_assistant.is_configured():
-            self.chat_page.add_notice("Configura la tua API key in Impostazioni → AI.")
+            self.chat_page.add_notice(t("win.chat_notice_config2"))
             self.chat_page.set_busy(True)
         else:
             self.chat_page.set_busy(False)
@@ -4037,7 +4014,7 @@ class DejaWindow(QWidget):
         import threading
         self._voice_stop_event = threading.Event()
         self.chat_page._set_mic_style(True)
-        self.chat_page.input.setPlaceholderText("🎙 In ascolto… clicca ⏹ per stop")
+        self.chat_page.input.setPlaceholderText(t("win.chat_listening"))
         self._voice_worker = VoiceWorker(self._voice_stop_event)
         self._voice_worker.started_transcribe.connect(self._on_voice_transcribing)
         self._voice_worker.done.connect(self._on_voice_done)
@@ -4045,20 +4022,20 @@ class DejaWindow(QWidget):
 
     def _on_voice_transcribing(self):
         # Stop ricezione → mostra stato trascrizione
-        self.chat_page.input.setPlaceholderText("✨ Trascrizione in corso…")
+        self.chat_page.input.setPlaceholderText(t("win.chat_transcribing"))
         self.chat_page.mic_btn.setEnabled(False)
 
     def _on_voice_done(self, text, log):
         self.chat_page._set_mic_style(False)
         self.chat_page.mic_btn.setEnabled(True)
         if text:
-            self.chat_page.input.setPlaceholderText("Scrivi un messaggio…")
+            self.chat_page.input.setPlaceholderText(t("win.chat_placeholder"))
             current = self.chat_page.input.text()
             self.chat_page.input.setText((current + " " + text).strip() if current else text)
-            self.toast(f"Trascritto: {text[:40]}{'…' if len(text) > 40 else ''}", level="ok")
+            self.toast(t("win.toast_transcribed", text=f"{text[:40]}{'…' if len(text) > 40 else ''}"), level="ok")
         else:
-            self.chat_page.input.setPlaceholderText("Scrivi un messaggio…")
-            self.toast(f"Niente trascritto", level="warn")
+            self.chat_page.input.setPlaceholderText(t("win.chat_placeholder"))
+            self.toast(t("win.toast_nothing_transcribed"), level="warn")
         self.chat_page.input.setFocus()
         self._voice_stop_event = None
         self._voice_worker = None
@@ -4114,7 +4091,7 @@ class DejaWindow(QWidget):
         self._results_col.setFixedWidth(420)
         self._sidebar.show()
         self.fs_toggle_btn.setText("⊡")
-        self.fs_toggle_btn.setToolTip("Esci da schermo intero (F11/ESC)")
+        self.fs_toggle_btn.setToolTip(t("win.fs_exit_tip"))
         self._update_sidebar_stats()
         self._refresh_sidebar_apps()
         self._update_mask()
@@ -4125,7 +4102,7 @@ class DejaWindow(QWidget):
         self._results_col.setFixedWidth(320)
         self._sidebar.hide()
         self.fs_toggle_btn.setText("⛶")
-        self.fs_toggle_btn.setToolTip("Schermo intero (F11)")
+        self.fs_toggle_btn.setToolTip(t("win.fs_enter_tip"))
         if self._prev_geom:
             self.setGeometry(self._prev_geom)
         else:
@@ -4154,7 +4131,7 @@ class DejaWindow(QWidget):
         # Filtra _all_results se in esplora mode, altrimenti _results
         source = self._all_results if self._all_mode else self._results
         if not source:
-            self.toast(f"Nessun risultato per filtrare", level="warn"); return
+            self.toast(t("win.toast_no_filter"), level="warn"); return
         self._filtered = [r for r in source if r.get("type") == "screenshot" and r.get("app") == app]
         self.results_list.blockSignals(True); self.results_list.clear(); self.results_list.blockSignals(False)
         for i, r in enumerate(self._filtered):
@@ -4167,26 +4144,26 @@ class DejaWindow(QWidget):
             it.setData(ITEM_TYPE_ROLE, "screenshot")
             self.results_list.addItem(it)
         self.status.setText(f"{len(self._filtered)} · APP: {app[:40]}")
-        self.toast(f"Filtrato per app: {app[:40]}", level="info")
+        self.toast(t("win.toast_filtered_app", app=app[:40]), level="info")
 
     def _open_date_filter(self):
         from PyQt6.QtWidgets import QDialog, QDateEdit, QDialogButtonBox
         from PyQt6.QtCore import QDate
         dlg = QDialog(self)
-        dlg.setWindowTitle("Range date custom — Déjà")
+        dlg.setWindowTitle(t("win.dr_title"))
         dlg.setFixedSize(380, 200)
         dlg.setStyleSheet(f"QDialog{{background:{BG_HEX}; color:#f3f4f6;}}"
                           " QDateEdit{background:rgba(255,255,255,0.05); color:#f3f4f6;"
                           " border:1px solid rgba(255,255,255,0.10); border-radius:7px; padding:5px 10px; font-size:11pt;}"
                           " QLabel{color:#f3f4f6; background:transparent;}")
         v = QVBoxLayout(dlg); v.setContentsMargins(22, 18, 22, 16); v.setSpacing(10)
-        title = QLabel("📅  Filtra ricordi per range date")
+        title = QLabel(t("win.dr_header"))
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C_AI_HEX};"); v.addWidget(title)
-        from_row = QHBoxLayout(); from_row.addWidget(QLabel("Da:"))
+        from_row = QHBoxLayout(); from_row.addWidget(QLabel(t("win.dr_from")))
         d_from = QDateEdit(); d_from.setCalendarPopup(True); d_from.setDate(QDate.currentDate().addDays(-7))
         from_row.addWidget(d_from); v.addLayout(from_row)
-        to_row = QHBoxLayout(); to_row.addWidget(QLabel("A:"))
+        to_row = QHBoxLayout(); to_row.addWidget(QLabel(t("win.dr_to")))
         d_to = QDateEdit(); d_to.setCalendarPopup(True); d_to.setDate(QDate.currentDate())
         to_row.addWidget(d_to); v.addLayout(to_row)
         v.addStretch()
@@ -4210,7 +4187,7 @@ class DejaWindow(QWidget):
             results.append({"id": row[0], "ts": row[1], "source": row[2], "transcript": row[3],
                             "audio_data": row[4], "audio_format": row[5] or "f32",
                             "type": "audio", "score": 1.0, "exact": False,
-                            "app": "🎙️ " + ("Microfono" if row[2] == "mic" else "Sistema"),
+                            "app": "🎙️ " + (t("win.card_mic") if row[2] == "mic" else t("win.card_system")),
                             "text": row[3]})
         conn.close()
         results.sort(key=lambda x: x["ts"], reverse=True)
@@ -4219,16 +4196,16 @@ class DejaWindow(QWidget):
         self._apply_filter(); self._show_results_page()
         self.status.setText(f"📅 {len(results)} · {d_from.date().toString('dd MMM')} → {d_to.date().toString('dd MMM')}")
         self.status.show(); self.sep.show()
-        self.toast(f"{len(results)} ricordi in range", level="info")
+        self.toast(t("win.toast_n_in_range", n=len(results)), level="info")
 
     def _show_pinned(self):
         try:
             from db import get_pinned
             pins = get_pinned()
         except Exception as e:
-            self.toast(f"Errore pinned: {e}", level="error"); return
+            self.toast(t("win.toast_pinned_err", e=e), level="error"); return
         if not pins:
-            self.toast("Nessun ricordo pinned. Clicca ⭐ in preview per marcare.", level="info"); return
+            self.toast(t("win.toast_no_pinned"), level="info"); return
         self._results = pins; self._all_results = pins
         self._filtered = pins; self._active_filter = "all"
         self.status.setText(f"⭐ {len(pins)} PINNED"); self.status.show()
@@ -4259,17 +4236,17 @@ class DejaWindow(QWidget):
             ss_pending = max(0, n_ss - n_ss_emb - n_ss_empty)
             au_pending = max(0, n_au - n_au_emb)
             parts = [
-                f"📸  {n_ss} screenshot",
-                f"🎙️  {n_au} audio",
+                t("win.stat_n_screenshots", n=n_ss),
+                t("win.stat_n_audio", n=n_au),
             ]
             if ss_pending or au_pending:
                 queue = []
-                if ss_pending: queue.append(f"{ss_pending} screenshot")
-                if au_pending: queue.append(f"{au_pending} audio")
-                parts.append(f"\n⏳  In coda: {', '.join(queue)}")
+                if ss_pending: queue.append(f"{ss_pending} {t('win.card_screenshot')}")
+                if au_pending: queue.append(f"{au_pending} {t('win.card_audio')}")
+                parts.append(t("win.stat_queue", items=', '.join(queue)))
             if n_ss_empty:
-                parts.append(f"⚠  {n_ss_empty} screen senza testo OCR")
-            parts.append(f"\n📂  Risultati: {len(self._filtered)}")
+                parts.append(t("win.stat_n_screen_no_ocr", n=n_ss_empty))
+            parts.append(t("win.stat_results", n=len(self._filtered)))
             self._sb_stats.setText("\n".join(parts))
         except Exception: pass
 
@@ -4289,12 +4266,12 @@ class DejaWindow(QWidget):
             path = os.path.expanduser("~/deja_export.json")
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            self.toast(f"Esportato in {path}", level="ok", duration_ms=4000)
+            self.toast(t("win.toast_exported", path=path), level="ok", duration_ms=4000)
         except Exception as e:
-            self.toast(f"Errore export: {e}", level="error", duration_ms=4500)
+            self.toast(t("win.toast_export_err", e=e), level="error", duration_ms=4500)
 
     def _confirm_clear(self):
-        self._sb_clear_btn.setText("⚠️  Conferma? (clicca ancora)")
+        self._sb_clear_btn.setText(t("win.db_confirm"))
         try: self._sb_clear_btn.clicked.disconnect()
         except Exception: pass
         self._sb_clear_btn.clicked.connect(self._do_clear)
@@ -4310,7 +4287,7 @@ class DejaWindow(QWidget):
         except Exception: pass
 
     def _reset_clear_btn(self):
-        self._sb_clear_btn.setText("🗑️  Svuota database")
+        self._sb_clear_btn.setText(t("win.db_clear"))
         try: self._sb_clear_btn.clicked.disconnect()
         except Exception: pass
         self._sb_clear_btn.clicked.connect(self._confirm_clear)

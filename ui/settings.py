@@ -35,7 +35,7 @@ def get_setting(key):
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Audio e lingua — Déjà")
+        self.setWindowTitle(t("set.window_title"))
         self.setFixedSize(480, 470)
         # Stessa accortezza del dialog principale: l'overlay di Déjà è stays-on-top,
         # quindi anche questa finestra deve restare sopra, altrimenti finisce dietro
@@ -64,14 +64,14 @@ class SettingsDialog(QDialog):
         mics      = [(idx, name) for tp, idx, name in devices if tp == "mic"]
         loopbacks = [(idx, name) for tp, idx, name in devices if tp == "loopback"]
 
-        section("AUDIO")
-        self.mic_combo = QComboBox(); self.mic_combo.addItem("Non registrare", None)
+        section(t("set.audio"))
+        self.mic_combo = QComboBox(); self.mic_combo.addItem(t("set.dont_record"), None)
         for idx, name in mics: self.mic_combo.addItem(name, idx)
-        field("Microfono", self.mic_combo)
+        field(t("set.mic"), self.mic_combo)
 
-        self.out_combo = QComboBox(); self.out_combo.addItem("Non registrare", None)
+        self.out_combo = QComboBox(); self.out_combo.addItem(t("set.dont_record"), None)
         for idx, name in loopbacks: self.out_combo.addItem(name, idx)
-        field("Audio di sistema", self.out_combo)
+        field(t("set.system_audio"), self.out_combo)
 
         saved_mic = get_setting("audio_mic_index"); saved_out = get_setting("audio_out_index")
         if saved_mic:
@@ -110,8 +110,8 @@ class SettingsDialog(QDialog):
         foot_sep.setStyleSheet("background:rgba(255,255,255,0.07); max-height:1px; min-height:1px; border:none;")
         root.addWidget(foot_sep)
         footer = QHBoxLayout(); footer.setContentsMargins(26, 14, 26, 16); footer.setSpacing(10)
-        cancel = QPushButton("Annulla"); cancel.clicked.connect(self.reject)
-        save = QPushButton("Salva"); save.setObjectName("save_btn"); save.clicked.connect(self._save)
+        cancel = QPushButton(t("set.cancel")); cancel.clicked.connect(self.reject)
+        save = QPushButton(t("set.save")); save.setObjectName("save_btn"); save.clicked.connect(self._save)
         footer.addStretch(); footer.addWidget(cancel); footer.addWidget(save)
         root.addLayout(footer)
 

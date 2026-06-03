@@ -199,13 +199,13 @@ class DejaTray(QSystemTrayIcon):
             dlg = open_ask_screen_dialog(parent=None)
             self._window._ask_dialog = dlg
         except Exception as e:
-            try: self._window.toast(f"Errore: {e}", level="error")
+            try: self._window.toast(t("tray.generic_error", e=e), level="error")
             except Exception: print(f"[Tray] ask_screen fail: {e}")
 
     def _backup(self):
         from datetime import datetime
         default_name = f"deja_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-        path, _ = QFileDialog.getSaveFileName(None, "Backup DB Deja", default_name, "Zip (*.zip)")
+        path, _ = QFileDialog.getSaveFileName(None, t("tray.backup_title"), default_name, "Zip (*.zip)")
         if not path: return
         ok, msg = backup_db(path)
         try: self._window.toast(msg, level=("ok" if ok else "error"), duration_ms=5000)
@@ -229,18 +229,16 @@ class DejaTray(QSystemTrayIcon):
             request_restart()
             self._window.toast(t("tray.restart_audio_msg"), level="info", duration_ms=3000)
         except Exception as e:
-            try: self._window.toast(f"Errore: {e}", level="error")
+            try: self._window.toast(t("tray.generic_error", e=e), level="error")
             except Exception: print(f"[Audio] restart fail: {e}")
 
     def _restore(self):
-        ans = QMessageBox.warning(None, "Conferma Restore",
-            "ATTENZIONE: questa operazione SOVRASCRIVE il DB corrente.\n"
-            "Il DB attuale verrà salvato come deja.db.prev_backup.\n\n"
-            "Vuoi continuare?",
+        ans = QMessageBox.warning(None, t("tray.restore_confirm_title"),
+            t("tray.restore_confirm_body"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes: return
-        path, _ = QFileDialog.getOpenFileName(None, "Restore DB Deja", "", "Zip (*.zip)")
+        path, _ = QFileDialog.getOpenFileName(None, t("tray.restore_title"), "", "Zip (*.zip)")
         if not path: return
         ok, msg = restore_db(path)
         try: self._window.toast(msg, level=("ok" if ok else "error"), duration_ms=8000)
