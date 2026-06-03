@@ -201,6 +201,13 @@ def main():
     else:
         print("[INFO] Modalità ridotta: indexer e trascrizione audio disattivati (torch non disponibile).")
     exit_code = app.exec()
+    # Togli subito l'icona dal tray: lo shutdown (join thread + VACUUM) può
+    # richiedere qualche secondo e l'utente non deve vedere un'icona "morta".
+    try:
+        tray.hide()
+        app.processEvents()
+    except Exception:
+        pass
     stop_event.set()
     for t in threads:
         t.join(timeout=5)
