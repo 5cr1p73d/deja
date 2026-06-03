@@ -514,7 +514,7 @@ class SettingsDialog(QDialog):
         lbl_model = QLabel("Modello"); lbl_model.setObjectName("field"); lbl_model.setFixedWidth(110)
         self._ai_model = QComboBox()
         self._ai_model.setEditable(True)  # qualsiasi modello, anche non in lista
-        models = getattr(_cfg, "AI_MODELS", ["Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"])
+        models = getattr(_cfg, "AI_MODELS", [])
         for m in models:
             self._ai_model.addItem(m)
         cur_model = ai_cfg.get("model", models[0])
@@ -2627,7 +2627,7 @@ class AskScreenDialog(QDialog):
             bar = self.answer_scroll.verticalScrollBar()
             bar.setValue(bar.maximum())
         elif kind == "info":
-            # Badge modalità: "vision · gemini-..." / "ocr · qwen-..."
+            # Badge modalità: "vision · gemini-..." / "ocr · model-..."
             self.status_lbl.setText(f"⚡ {content}")
         elif kind == "error":
             self.answer_label.setText(

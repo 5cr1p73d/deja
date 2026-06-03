@@ -47,8 +47,9 @@ def is_local_endpoint(url: str) -> bool:
 
 def is_configured():
     cfg = get_ai_config()
-    # Configurato se c'è una key, oppure se l'endpoint è locale (key non necessaria).
-    return bool(cfg["api_key"]) or is_local_endpoint(cfg["base_url"])
+    # Serve un modello scelto dall'utente (nessun default preimpostato), più una
+    # key oppure un endpoint locale (la key non serve in locale).
+    return bool(cfg["model"]) and (bool(cfg["api_key"]) or is_local_endpoint(cfg["base_url"]))
 
 # ── Chat persistence ──────────────────────────────────────────────
 def save_chat_message(role, content, conversation_id=1):

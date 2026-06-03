@@ -7,7 +7,10 @@ conn = get_conn(); c = conn.cursor()
 rows = dict(c.execute("SELECT key, value FROM settings WHERE key LIKE 'ai_%'").fetchall())
 conn.close()
 api_key = (rows.get("ai_api_key") or "").strip()
-model = (rows.get("ai_model") or "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8").strip()
+model = (rows.get("ai_model") or "").strip()
+if not model:
+    print("Nessun modello AI configurato (Impostazioni → AI). Imposta 'ai_model' nel DB per il test.")
+    sys.exit(1)
 
 for base in ["https://api.gonkagate.com/v1", "https://api.gonkagate.com/v1/"]:
     print(f"== {base} ==")

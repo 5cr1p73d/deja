@@ -108,9 +108,9 @@ Con endpoint locale l'**API Key non serve** (lascia vuoto).
 **Chat — modelli consigliati** (servono buone capacità multilingue + *tool calling*,
 usato per cercare nei ricordi):
 
-- `qwen2.5:7b` / `qwen2.5:14b` — ottimo tool-calling, multilingue (consigliato)
-- `llama3.1:8b` — valida alternativa con tool-calling
-- `mistral-nemo` — leggero
+- `llama3.1:8b` — buon tool-calling, multilingue (consigliato)
+- `mistral-nemo` — leggero, con tool-calling
+- qualsiasi modello con *function calling* e buone capacità multilingue
 - ⚠ Modelli senza supporto *function calling* funzionano per la chat libera ma **non**
   riescono a cercare automaticamente nei ricordi.
 
@@ -118,7 +118,6 @@ usato per cercare nei ricordi):
 
 - `llama3.2-vision:11b`
 - `llava:13b` / `llava:7b`
-- `qwen2.5vl`
 
 Scarica con `ollama pull <modello>`. Regola: più grande = migliore ma più lento;
 parti dalle taglie piccole se hai poca VRAM.

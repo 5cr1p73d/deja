@@ -27,11 +27,10 @@ SCREENSHOT_MIN_SCORE = 0.18
 
 # ── AI Assistant ───────────────────────────────────────────────────
 AI_BASE_URL_DEFAULT   = "https://api.gonkagate.com/v1"
-AI_MODELS             = [
-    "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8",
-    "moonshotai/Kimi-K2.6",
-]
-AI_MODEL_DEFAULT      = AI_MODELS[0]
+# Nessun modello preimpostato: lo sceglie l'utente (combo editabile +
+# "Rileva modelli" in Impostazioni → AI). Endpoint OpenAI-compatibile.
+AI_MODELS             = []
+AI_MODEL_DEFAULT      = ""
 AI_MAX_TOKENS         = 2048
 AI_CONTEXT_TOKENS     = 128_000
 AI_RAG_TOP_K          = 10
