@@ -4,73 +4,60 @@
 
 # Déjà
 
-**La tua memoria digitale per Windows.**
+**Your digital memory for Windows.**
 
-Déjà cattura in background ciò che vedi e ascolti sul PC, lo indicizza in locale
-e ti permette di **ritrovarlo** con una ricerca semantica — o di **chiederlo** a un
-assistente AI. Tipo [Rewind AI](https://www.rewind.ai/), ma open source e con i
-dati che restano sul tuo computer.
+Déjà captures in the background what you see and hear on your PC, indexes it locally, and lets you **find it again** with a semantic search — or **ask** an AI assistant about it. Like [Rewind AI](https://www.rewind.ai/), but open source and with data that stays on your computer.
 
 </div>
 
 ---
 
-## Cos'è
+## What it is
 
-Déjà gira nel system tray e fa tre cose:
+Déjà runs in the system tray and does three things:
 
-1. **Cattura** — screenshot periodici (default ogni 5s) + audio di sistema e microfono.
-2. **Indicizza** — OCR sugli screenshot, trascrizione Whisper sull'audio, ed
-   embedding multilingue di tutto il testo in un DB SQLite locale.
-3. **Ritrova** — un overlay (`Ctrl+Shift+D`) per cercare nei tuoi ricordi con
-   ricerca semantica + esatta, esplorare la timeline, o chattare con un assistente
-   AI che ha accesso al tuo contesto (RAG).
+1. **Capture** — periodic screenshots (default every 5s) + system audio and microphone.
+2. **Index** — OCR on screenshots, Whisper transcription on audio, and multilingual embeddings of all text in a local SQLite DB.
+3. **Retrieve** — an overlay (`Ctrl+Shift+D`) to search your memories with semantic + exact search, browse the timeline, or chat with an AI assistant that has access to your context (RAG).
 
-Tutto l'indice vive in locale. I modelli di cattura/OCR/trascrizione girano
-offline; le funzioni di chat AI opzionali usano un endpoint OpenAI-compatibile a
-tua scelta — **anche locale** (Ollama / LM Studio), così nulla esce dal PC.
+The entire index lives locally. Capture/OCR/transcription models run offline; optional AI chat functions use an OpenAI-compatible endpoint of your choice — **even local** (Ollama / LM Studio), so nothing leaves the PC.
 
-## Funzionalità
+## Features
 
-- 🖼️ **Cattura schermo + OCR** (`ita+eng`, Tesseract) con dedup dei frame identici.
-- 🎙️ **Cattura audio** loopback di sistema + microfono, trascrizione `faster-whisper`.
-- 🔎 **Ricerca ibrida** — semantica (embedding 768-dim, cosine int8 via `sqlite-vec`)
-  + match esatto, con filtri per data e tipo.
-- 🗂️ **Timeline "Esplora"** — sfoglia tutto per Oggi / Ieri / 7 giorni / Tutto.
-- 💬 **Chat AI con RAG** — fai domande sulla tua attività; l'assistente recupera i
-  ricordi rilevanti come contesto.
-- 👁️ **Ask Screen** (`Ctrl+Shift+A`) — chiedi all'AI cosa c'è sullo schermo ora (vision).
-- 🌍 **Multilingua** — interfaccia e ricerca in `it` / `en` / `es`.
-- 🔒 **Privacy-first** — DB locale, onboarding con consenso esplicito, filtri privacy.
-- 🧯 **Degradazione robusta** — se i modelli ML non caricano (es. VC++ redist mancante),
-  cattura + OCR + ricerca testuale continuano a funzionare.
+- 🖼️ **Screen capture + OCR** (`ita+eng`, Tesseract) with deduplication of identical frames.
+- 🎙️ **Audio capture** — system loopback + microphone, transcription via `faster-whisper`.
+- 🔎 **Hybrid search** — semantic (768-dim embeddings, cosine int8 via `sqlite-vec`) + exact match, with filters by date and type.
+- 🗂️ **"Explore" Timeline** — browse everything by Today / Yesterday / 7 days / All.
+- 💬 **AI Chat with RAG** — ask questions about your activity; the assistant retrieves relevant memories as context.
+- 👁️ **Ask Screen** (`Ctrl+Shift+A`) — ask the AI what's on the screen right now (vision).
+- 🌍 **Multilingual** — interface and search in `it` / `en` / `es`.
+- 🔒 **Privacy-first** — local DB, onboarding with explicit consent, privacy filters.
+- 🧯 **Robust degradation** — if ML models fail to load (e.g. missing VC++ redist), capture + OCR + text search continue to work.
 
-## Stack tecnico
+## Tech Stack
 
-| Layer | Tecnologia |
-|-------|-----------|
+| Layer | Technology |
+|-------|------------|
 | GUI | PyQt6 (system tray + overlay) |
 | DB | SQLite WAL + [`sqlite-vec`](https://github.com/asg017/sqlite-vec) — cosine int8, 768-dim |
-| Embeddings | `paraphrase-multilingual-mpnet-base-v2` (multilingue, 768-dim) |
+| Embeddings | `paraphrase-multilingual-mpnet-base-v2` (multilingual, 768-dim) |
 | STT | `faster-whisper` (`large-v3-turbo`, CPU int8) |
 | OCR | Tesseract (`ita+eng`) |
 | Audio | `pyaudiowpatch` (loopback callback-based) |
-| Chat AI | OpenAI SDK su qualsiasi endpoint OpenAI-compatibile (locale o cloud) |
-| Vision | Qualsiasi modello multimodale OpenAI-compatibile (Ask Screen) |
+| Chat AI | OpenAI SDK on any OpenAI-compatible endpoint (local or cloud) |
+| Vision | Any OpenAI-compatible multimodal model (Ask Screen) |
 | Hotkey | `keyboard` — `Ctrl+Shift+D` (overlay), `Ctrl+Shift+A` (ask screen) |
 
-## Installazione (utente)
+## Installation (user)
 
-Scarica l'installer Windows dalla sezione [Releases](https://github.com/5cr1p73d/deja/releases)
-(`Deja-Setup-1.0.0.exe`, ~265 MB, include il runtime VC++) ed esegui. Al primo avvio
-l'onboarding chiede il consenso prima di iniziare qualsiasi cattura.
+Download the Windows installer from the [Releases](https://github.com/5cr1p73d/deja/releases) section (`Deja-Setup-1.0.0.exe`, ~265 MB, includes the VC++ runtime) and run it. On first launch, the onboarding asks for consent before starting any capture.
 
-> Per l'OCR serve [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki).
-> Déjà lo cerca in automatico (env `TESSERACT_CMD` → `PATH` → posizioni note).
+> OCR requires [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki).
+> Déjà looks for it automatically (env `TESSERACT_CMD` → `PATH` → known locations).
 
-## Sviluppo
+## Development
 
-Requisiti: **Windows**, **Python 3.11+**, [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki).
+Requirements: **Windows**, **Python 3.11+**, [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki).
 
 ```powershell
 git clone https://github.com/5cr1p73d/deja.git
@@ -81,103 +68,91 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Al primo avvio i modelli (embedding ~1 GB, Whisper) vengono scaricati da
-HuggingFace e messi in cache.
+On first launch, models (embedding ~1 GB, Whisper) are downloaded from HuggingFace and cached.
 
-### Configurazione AI (opzionale)
+### AI Configuration (optional)
 
-Le funzioni di chat/vision sono opzionali. Senza AI, cattura, OCR, trascrizione e
-ricerca funzionano comunque.
+Chat/vision features are optional. Without AI, capture, OCR, transcription and search still work.
 
-Déjà parla con **qualsiasi endpoint OpenAI-compatibile** — locale o cloud. Non sei
-legato a nessun provider: imposti Base URL + (eventuale) API Key + modello da
-**Impostazioni → AI**, e il pulsante **🔄 Rileva** elenca i modelli disponibili
-sull'endpoint. Il campo modello è libero: puoi digitare qualsiasi id.
+Déjà works with **any OpenAI-compatible endpoint** — local or cloud. You're not tied to any provider: set Base URL + (optional) API Key + model in **Settings → AI**, and the **🔄 Detect** button lists available models on the endpoint. The model field is free-text: you can type any ID.
 
-#### Modelli locali (privacy totale, nessuna key)
+#### Local models (full privacy, no key needed)
 
-Punta la Base URL al tuo server locale (preset già pronti in Impostazioni):
+Point the Base URL to your local server (presets already available in Settings):
 
-| Server | Base URL | Avvio |
+| Server | Base URL | Start |
 |--------|----------|-------|
 | [Ollama](https://ollama.com) | `http://localhost:11434/v1` | `ollama serve` |
-| [LM Studio](https://lmstudio.ai) | `http://localhost:1234/v1` | avvia il server locale dall'app |
+| [LM Studio](https://lmstudio.ai) | `http://localhost:1234/v1` | start the local server from the app |
 
-Con endpoint locale l'**API Key non serve** (lascia vuoto).
+With a local endpoint, **API Key is not needed** (leave blank).
 
-**Chat — modelli consigliati** (servono buone capacità multilingue + *tool calling*,
-usato per cercare nei ricordi):
+**Chat — recommended models** (good multilingual capabilities + *tool calling* required, used to search memories):
 
-- `llama3.1:8b` — buon tool-calling, multilingue (consigliato)
-- `mistral-nemo` — leggero, con tool-calling
-- qualsiasi modello con *function calling* e buone capacità multilingue
-- ⚠ Modelli senza supporto *function calling* funzionano per la chat libera ma **non**
-  riescono a cercare automaticamente nei ricordi.
+- `llama3.1:8b` — good tool-calling, multilingual (recommended)
+- `mistral-nemo` — lightweight, with tool-calling
+- any model with *function calling* and good multilingual capabilities
+- ⚠ Models without *function calling* support work for free chat but **cannot** automatically search memories.
 
-**Vision (Ask Screen) — serve un modello multimodale:**
+**Vision (Ask Screen) — requires a multimodal model:**
 
 - `llama3.2-vision:11b`
 - `llava:13b` / `llava:7b`
 
-Scarica con `ollama pull <modello>`. Regola: più grande = migliore ma più lento;
-parti dalle taglie piccole se hai poca VRAM.
+Download with `ollama pull <model>`. Rule: bigger = better but slower; start with smaller sizes if you have limited VRAM.
 
-#### Provider cloud
+#### Cloud providers
 
-Funziona qualsiasi servizio OpenAI-compatibile (OpenAI, OpenRouter, Groq, Together,
-o gateway self-host). Incolla Base URL + API Key del provider e premi **🔄 Rileva**.
-⚠ Con un provider cloud per la Vision, l'immagine dello schermo esce dal tuo PC.
+Any OpenAI-compatible service works (OpenAI, OpenRouter, Groq, Together, or self-hosted gateway). Paste the provider's Base URL + API Key and press **🔄 Detect**.
 
-## Comandi
+⚠ With a cloud provider for Vision, the screen image leaves your PC.
 
-| Hotkey | Azione |
+## Commands
+
+| Hotkey | Action |
 |--------|--------|
-| `Ctrl+Shift+D` | Apri/chiudi l'overlay di ricerca |
-| `Ctrl+Shift+A` | Ask Screen — chiedi all'AI cosa c'è a schermo |
-| `Esplora` | Sfoglia tutta la timeline |
-| `Chat` | Apri l'assistente AI |
+| `Ctrl+Shift+D` | Open/close the search overlay |
+| `Ctrl+Shift+A` | Ask Screen — ask the AI what's on screen |
+| `Explore` | Browse the full timeline |
+| `Chat` | Open the AI assistant |
 
-## Dove finiscono i dati
+## Where data is stored
 
-Tutto in una user data dir scrivibile (mai in `Program Files`):
+Everything in a writable user data dir (never in `Program Files`):
 
 ```
 %LOCALAPPDATA%\Deja\
-  deja.db            indice SQLite (+ .wal, .shm)
-  logs\deja.log      log applicativo
-  models\            cache modelli HuggingFace (build consumer)
+  deja.db           SQLite index (+ .wal, .shm)
+  logs\deja.log     application log
+  models\           HuggingFace model cache (consumer build)
 ```
 
-In sviluppo da sorgente, se esiste già un `deja.db` nella cartella del progetto
-viene riusato quello.
+When developing from source, if a `deja.db` already exists in the project folder, that one is reused.
 
 ## Build
 
 ```powershell
-.\build.bat        # PyInstaller (onedir) → dist\
-# installer: Inno Setup su deja.iss
+.\build.bat    # PyInstaller (onedir) → dist\
+               # installer: Inno Setup on deja.iss
 ```
 
-## Struttura progetto
+## Project Structure
 
 ```
-main.py             entry point, gestione errori + degradazione torch
-config.py           costanti runtime (modelli, intervalli, endpoint)
-paths.py            percorsi consumer-safe (user data dir)
-db.py               schema SQLite + sqlite-vec + settings
-modules/            capturer, indexer, audio, search, ai_assistant, ask_screen, privacy
-ui/                 window (overlay), tray, settings, hotkey, onboarding
-i18n.py             traduzioni it/en/es
-obsidian/deja/      vault di documentazione interna
+main.py           entry point, error handling + torch degradation
+config.py         runtime constants (models, intervals, endpoints)
+paths.py          consumer-safe paths (user data dir)
+db.py             SQLite schema + sqlite-vec + settings
+modules/          capturer, indexer, audio, search, ai_assistant, ask_screen, privacy
+ui/               window (overlay), tray, settings, hotkey, onboarding
+i18n.py           it/en/es translations
+obsidian/deja/    internal documentation vault
 ```
 
 ## Privacy
 
-Déjà è progettato per restare locale: nessun upload automatico, indice solo sul tuo
-PC, consenso esplicito prima di catturare. Le sole chiamate di rete sono le funzioni
-AI opzionali (chat/vision) verso l'endpoint che configuri tu.
+Déjà is designed to stay local: no automatic uploads, index only on your PC, explicit consent before capturing. The only network calls are the optional AI functions (chat/vision) to the endpoint you configure.
 
-## Licenza
+## License
 
-Vedi [`LICENSE`](LICENSE). Déjà cattura dati potenzialmente sensibili: usalo solo sui
-tuoi dispositivi e nel rispetto delle leggi applicabili.
+See [`LICENSE`](LICENSE). Déjà captures potentially sensitive data: use it only on your own devices and in compliance with applicable laws.
