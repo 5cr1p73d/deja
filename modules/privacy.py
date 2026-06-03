@@ -88,6 +88,11 @@ def is_app_blocked(app_name: str, patterns: list[str]) -> bool:
 
 # ── OCR redaction ─────────────────────────────────────────────────
 _REDACT_PATTERNS = [
+    # Token / API key visibili a schermo (OpenAI sk-, GitHub ghp_, Google AIza,
+    # Slack xox*) → tolti per primi (possono contenere cifre che altri pattern
+    # spezzerebbero).
+    (re.compile(r"\b(?:sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|"
+                r"xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z\-_]{30,})\b"), "***SECRET***"),
     # Carte credito (semplificato): 13-19 digits con separatori opzionali
     (re.compile(r"\b(?:\d[ -]?){13,19}\b"), "***CARD***"),
     # IBAN (basic): IT + 25 char alfanumeric
@@ -96,6 +101,9 @@ _REDACT_PATTERNS = [
     (re.compile(r"\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\b", re.IGNORECASE), "***CF***"),
     # Email
     (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "***EMAIL***"),
+    # Telefono: prefisso internazionale opzionale + gruppi separati (richiede
+    # almeno un separatore per evitare di colpire ID/numeri lunghi senza spazi).
+    (re.compile(r"(?<!\d)(?:\+\d{1,3}[ .\-]?)?(?:\(?\d{2,4}\)?[ .\-]){1,3}\d{2,4}(?!\d)"), "***TEL***"),
 ]
 
 def redact_pii(text: str, enabled: bool = True) -> str:

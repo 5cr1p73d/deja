@@ -53,7 +53,7 @@ except Exception as e:  # OSError/WinError 1114, ImportError, ecc.
     )
 
 from PyQt6.QtWidgets import QApplication
-from db import init_db, load_settings_into_config, vacuum_db
+from db import init_db, load_settings_into_config, vacuum_db, ensure_encrypted
 from modules import capturer, indexer, audio
 from ui.window import DejaWindow, open_ask_screen_dialog
 from ui.tray import DejaTray
@@ -127,6 +127,20 @@ threading.excepthook = _thread_exception
 def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+
+    # Cifratura a riposo: migra un eventuale deja.db in chiaro a SQLCipher
+    # PRIMA di aprire qualsiasi connessione. Degrada in silenzio se non
+    # disponibile (DPAPI/SQLCipher assenti).
+    try:
+        ensure_encrypted()
+    except Exception:
+        logging.getLogger("deja").exception("ensure_encrypted fallita (proseguo)")
+
+    # Difesa in profondità: restringe la ACL della cartella dati al solo utente.
+    try:
+        paths.harden_data_dir_acl()
+    except Exception:
+        logging.getLogger("deja").exception("harden ACL fallita (proseguo)")
 
     # Init DB con gestione errori (mai crash silenzioso per il consumer).
     try:

@@ -29,6 +29,8 @@ hiddenimports += [
     "encodings.cp1252", "encodings.idna", "codecs",
     "pyaudiowpatch", "sounddevice", "mss", "pytesseract", "pygetwindow",
     "keyboard", "numpy", "PIL", "ctypes", "ctypes.util",
+    # DB cifrato (SQLCipher) + segreti DPAPI
+    "sqlcipher3", "sqlcipher3.dbapi2", "modules.secrets",
     # moduli app caricati in modo lazy (PyInstaller potrebbe non vederli)
     "ui.onboarding", "paths", "applog", "autostart",
 ]

@@ -28,6 +28,7 @@ from modules import search as search_module
 from modules import ai_assistant
 import i18n
 from i18n import t
+from modules.secrets import protect_secret as _protect
 try:
     import config as _cfg
 except Exception:
@@ -728,7 +729,7 @@ class SettingsDialog(QDialog):
         # Salva prima i campi correnti così il test usa i valori attuali
         try:
             from db import save_setting
-            save_setting("ai_api_key",  self._ai_key.text().strip())
+            save_setting("ai_api_key",  _protect(self._ai_key.text().strip()))
             save_setting("ai_base_url", self._ai_url.text().strip())
             save_setting("ai_model",    self._ai_model.currentText().strip())
         except Exception:
@@ -753,7 +754,7 @@ class SettingsDialog(QDialog):
         # Persist vision fields prima del test
         try:
             from db import save_setting
-            save_setting("ai_vision_api_key",  self._vis_key.text().strip())
+            save_setting("ai_vision_api_key",  _protect(self._vis_key.text().strip()))
             save_setting("ai_vision_base_url", self._vis_url.text().strip())
             save_setting("ai_vision_model",    self._vis_model.currentText().strip())
             save_setting("ai_vision_enabled",  "1" if self._vis_enabled.isChecked() else "0")
@@ -889,7 +890,7 @@ class SettingsDialog(QDialog):
 
         # 3. Settings AI (text)
         try:
-            save_setting("ai_api_key",    self._ai_key.text().strip())
+            save_setting("ai_api_key",    _protect(self._ai_key.text().strip()))
             save_setting("ai_base_url",   self._ai_url.text().strip())
             save_setting("ai_model",      self._ai_model.currentText().strip())
             save_setting("ai_inline_rag", "1" if self._ai_inline.isChecked() else "0")
@@ -899,7 +900,7 @@ class SettingsDialog(QDialog):
         # 4. Settings Vision (Ask Screen)
         try:
             save_setting("ai_vision_enabled",  "1" if self._vis_enabled.isChecked() else "0")
-            save_setting("ai_vision_api_key",  self._vis_key.text().strip())
+            save_setting("ai_vision_api_key",  _protect(self._vis_key.text().strip()))
             save_setting("ai_vision_base_url", self._vis_url.text().strip())
             save_setting("ai_vision_model",    self._vis_model.currentText().strip())
         except Exception as e:
@@ -3218,9 +3219,22 @@ class DejaWindow(QWidget):
         try:
             self.toast(t("win.toast_ocr_on", name=path.split('/')[-1].split(chr(92))[-1]), level="info", duration_ms=2000)
             QApplication.processEvents()
+            import os as _os
             import pytesseract
             from PIL import Image
             from config import OCR_LANG
+            # Difesa: limite dimensione + validazione magic bytes (l'estensione
+            # da sola è falsificabile). Header noti: PNG/JPEG/GIF/BMP/WEBP.
+            if _os.path.getsize(path) > 50 * 1024 * 1024:
+                self.toast(t("win.toast_ocr_fail", e="file troppo grande (>50MB)"), level="error", duration_ms=4000)
+                return
+            with open(path, "rb") as _f:
+                _head = _f.read(12)
+            _sigs = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a", b"BM")
+            _is_img = any(_head.startswith(s) for s in _sigs) or (_head[:4] == b"RIFF" and _head[8:12] == b"WEBP")
+            if not _is_img:
+                self.toast(t("win.toast_ocr_fail", e="formato immagine non valido"), level="error", duration_ms=4000)
+                return
             img = Image.open(path)
             text = pytesseract.image_to_string(img, lang=OCR_LANG).strip()
         except Exception as e:

@@ -50,6 +50,41 @@ def db_path() -> str:
     return os.path.join(data_dir(), "deja.db")
 
 
+def harden_data_dir_acl() -> None:
+    """Restringe la cartella dati al solo utente corrente (rimuove ereditarietà
+    e altri principal): difesa in profondità su PC multi-utente. Idempotente
+    via marker; best-effort, non blocca l'avvio se fallisce. Solo Windows."""
+    if os.name != "nt":
+        return
+    import subprocess
+    d = data_dir()
+    marker = os.path.join(d, ".acl_hardened")
+    if os.path.exists(marker):
+        return
+    user = os.environ.get("USERNAME") or os.environ.get("USER")
+    if not user:
+        return
+    try:
+        # Niente /T: non ricorrere sulla cache modelli (lenta e voluminosa).
+        # (OI)(CI) fa ereditare la regola ai nuovi file/cartelle.
+        subprocess.run(
+            ["icacls", d, "/inheritance:r", "/grant:r", f"{user}:(OI)(CI)F", "/C", "/Q"],
+            capture_output=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        # Stringi anche i file sensibili già esistenti (DB + chiave).
+        for name in ("deja.db", "deja.db-wal", "deja.db-shm", "dbkey.bin"):
+            p = os.path.join(d, name)
+            if os.path.exists(p):
+                subprocess.run(
+                    ["icacls", p, "/inheritance:r", "/grant:r", f"{user}:F", "/C", "/Q"],
+                    capture_output=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+        with open(marker, "w") as f:
+            f.write("ok")
+    except Exception:
+        pass
+
+
 def logs_dir() -> str:
     d = os.path.join(data_dir(), "logs")
     os.makedirs(d, exist_ok=True)

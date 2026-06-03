@@ -172,7 +172,7 @@ def _process_loop(data_queue, source_label, stop_event):
             text, speech_audio = _transcribe(audio)
             if text and speech_audio is not None:
                 _save(text, source_label, speech_audio)
-                print(f"[Audio/{source_label}] {text[:80]}... ({len(speech_audio)/16000:.1f}s rms={rms:.4f})")
+                print(f"[Audio/{source_label}] trascritto {len(text)} char ({len(speech_audio)/16000:.1f}s rms={rms:.4f})")
         except queue.Empty: continue
         except Exception as e: print(f"[Audio/{source_label}] Errore: {e}")
 

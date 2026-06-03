@@ -1,11 +1,58 @@
 # db.py
-import sqlite3
+import os
+import sqlite3  # stdlib: rilevamento "plaintext" e fallback
 from config import DB_PATH
+
+# Driver SQLCipher (DB cifrato a riposo). Se non disponibile, si degrada a
+# sqlite3 in chiaro (nessuna regressione funzionale).
+try:
+    from sqlcipher3 import dbapi2 as _sqlcipher
+    _HAVE_SQLCIPHER = True
+except Exception:
+    _sqlcipher = None
+    _HAVE_SQLCIPHER = False
 
 # Embedding dim (paraphrase-multilingual-mpnet-base-v2)
 EMBED_DIM = 768
 
 _vec_available = None
+
+# Chiave DB (64 hex = 32 byte) protetta con DPAPI. None ⇒ DB resta in chiaro
+# (DPAPI/SQLCipher non disponibili). Caricata pigramente una sola volta.
+_db_key_hex = None
+_key_loaded = False
+
+
+def _get_key():
+    global _db_key_hex, _key_loaded
+    if not _key_loaded:
+        _key_loaded = True
+        if _HAVE_SQLCIPHER:
+            try:
+                from modules.secrets import get_db_key_hex
+                _db_key_hex = get_db_key_hex()
+            except Exception as e:
+                print(f"[DB] chiave non disponibile (DB in chiaro): {e!r}")
+                _db_key_hex = None
+    return _db_key_hex
+
+
+def db_encrypted() -> bool:
+    """True se le connessioni vengono cifrate (SQLCipher + chiave attiva)."""
+    return _HAVE_SQLCIPHER and _get_key() is not None
+
+
+def _connect_raw(path, key_hex):
+    """Connessione grezza. Usa SQLCipher se disponibile e applica la chiave
+    SUBITO (PRAGMA key deve precedere ogni altra operazione)."""
+    if _HAVE_SQLCIPHER:
+        conn = _sqlcipher.connect(path, check_same_thread=False, timeout=30)
+        if key_hex:
+            conn.execute(f"PRAGMA key=\"x'{key_hex}'\"")
+    else:
+        conn = sqlite3.connect(path, check_same_thread=False, timeout=30)
+    return conn
+
 
 def _try_load_vec(conn):
     """Carica estensione sqlite-vec. Ritorna True se OK."""
@@ -25,7 +72,7 @@ def vec_available():
     return _vec_available is True
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+    conn = _connect_raw(DB_PATH, _get_key())
     try:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=30000")
@@ -35,6 +82,85 @@ def get_conn():
         print(f"[DB] PRAGMA setup fail: {e}")
     _try_load_vec(conn)
     return conn
+
+
+def _is_plaintext_db(path) -> bool:
+    """Un DB è 'plaintext' se si apre e legge SENZA chiave."""
+    try:
+        c = _connect_raw(path, None)
+        c.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        c.close()
+        return True
+    except Exception:
+        return False
+
+
+def ensure_encrypted():
+    """Da chiamare all'avvio PRIMA di init_db e di qualsiasi altra connessione.
+    Se il DB esistente è in chiaro e la cifratura è disponibile, lo migra a
+    SQLCipher in-place. Un DB nuovo verrà creato già cifrato da get_conn."""
+    if not _HAVE_SQLCIPHER:
+        return
+    key = _get_key()
+    if not key:
+        return
+    if not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0:
+        return  # nuovo → creato cifrato
+    if not _is_plaintext_db(DB_PATH):
+        return  # già cifrato
+    _migrate_plaintext_to_encrypted(DB_PATH, key)
+
+
+def _migrate_plaintext_to_encrypted(path, key_hex):
+    """Converte un deja.db in chiaro in SQLCipher, in-place. Non lascia copie
+    in chiaro: il backup temporaneo .pre_encrypt viene rimosso a fine OK."""
+    import shutil
+    print("[DB] Migrazione a DB cifrato in corso…")
+    # 1. Consolida WAL nel file principale
+    try:
+        c = _connect_raw(path, None)
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        c.execute("PRAGMA journal_mode=DELETE")
+        c.close()
+    except Exception:
+        pass
+    tmp = path + ".enc_tmp"
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    try:
+        # 2. Export logico nel DB cifrato
+        src = _connect_raw(path, None)
+        esc = tmp.replace("'", "''")
+        src.execute(f"ATTACH DATABASE '{esc}' AS enc KEY \"x'{key_hex}'\"")
+        src.execute("SELECT sqlcipher_export('enc')")
+        src.execute("DETACH DATABASE enc")
+        src.close()
+        # 3. Verifica che il cifrato si apra e legga con la chiave
+        v = _connect_raw(tmp, key_hex)
+        v.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        v.close()
+        # 4. Sostituzione atomica (tieni backup plaintext finché non è a posto)
+        pre = path + ".pre_encrypt"
+        if os.path.exists(pre):
+            os.remove(pre)
+        os.replace(path, pre)
+        os.replace(tmp, path)
+        for ext in ("-wal", "-shm"):
+            p = path + ext
+            if os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
+        # 5. Rimuovi il backup in chiaro (non lasciare dati non cifrati)
+        try: os.remove(pre)
+        except Exception: pass
+        print("[DB] Migrazione a DB cifrato completata.")
+    except Exception as e:
+        print(f"[DB] Migrazione fallita, DB lasciato invariato: {e!r}")
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
 
 def init_db():
     conn = get_conn()
@@ -277,12 +403,29 @@ def restore_db(src_zip_path):
         # Backup vecchio prima
         if os.path.exists(DB_PATH):
             shutil.copy2(DB_PATH, backup_old)
-        # Estrai zip in cwd (sovrascrive deja.db, -wal, -shm)
+        # Estrai SOLO i nomi attesi, usando esclusivamente il basename per
+        # neutralizzare zip-slip / path traversal (es. "..\\evil.db" o path
+        # assoluti). Scriviamo a mano in target_dir, non con z.extract.
         target_dir = os.path.dirname(os.path.abspath(DB_PATH)) or "."
+        allowed = {
+            os.path.basename(DB_PATH),
+            os.path.basename(DB_PATH) + "-wal",
+            os.path.basename(DB_PATH) + "-shm",
+        }
+        extracted = 0
         with zipfile.ZipFile(src_zip_path, "r") as z:
             for member in z.namelist():
-                if member.endswith(".db") or member.endswith("-wal") or member.endswith("-shm"):
-                    z.extract(member, target_dir)
+                base = os.path.basename(member.replace("\\", "/"))
+                if not base or base not in allowed:
+                    continue  # ignora nomi inattesi o tentativi di traversal
+                dest = os.path.join(target_dir, base)
+                if os.path.commonpath([os.path.abspath(dest), os.path.abspath(target_dir)]) != os.path.abspath(target_dir):
+                    continue  # difesa extra: il path deve restare in target_dir
+                with z.open(member) as srcf, open(dest, "wb") as outf:
+                    shutil.copyfileobj(srcf, outf)
+                extracted += 1
+        if extracted == 0:
+            return False, "Zip non valido: nessun file deja.db trovato"
         return True, f"Restore OK. Backup precedente: {backup_old}. Riavvia app."
     except Exception as e:
         return False, f"Errore restore: {e}"

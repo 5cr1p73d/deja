@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 
 from db import get_conn
 from modules import search as search_module
+from modules.secrets import reveal_secret
 import i18n
 from config import (
     AI_BASE_URL_DEFAULT, AI_MODEL_DEFAULT,
@@ -32,7 +33,7 @@ def get_ai_config():
     if "node4.gonka.ai" in base:
         base = "https://api.gonkagate.com/v1"
     return {
-        "api_key":   _get_setting("ai_api_key", "").strip(),
+        "api_key":   reveal_secret(_get_setting("ai_api_key", "")).strip(),
         "base_url":  base,
         "model":     (_get_setting("ai_model", AI_MODEL_DEFAULT) or AI_MODEL_DEFAULT).strip(),
         "inline":    _get_setting("ai_inline_rag", "0") == "1",
@@ -44,6 +45,43 @@ def is_local_endpoint(url: str) -> bool:
     u = (url or "").lower()
     return (any(h in u for h in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]", "://::1"))
             or ".local" in u)
+
+
+def is_safe_endpoint(url: str):
+    """Anti-SSRF. Ritorna (ok, motivo). Consente endpoint locali espliciti
+    (Ollama/LM Studio/.local) e https pubblici; BLOCCA https verso IP privati,
+    loopback, link-local (169.254/16, metadata cloud), riservati. Risolve il
+    DNS e valida ogni IP (difesa best-effort anche da DNS-rebind banale)."""
+    import ipaddress, socket
+    from urllib.parse import urlparse
+    u = (url or "").strip()
+    if not u:
+        return False, "URL vuoto"
+    if is_local_endpoint(u):
+        return True, ""  # locale esplicito: ammesso (anche http)
+    try:
+        p = urlparse(u)
+    except Exception:
+        return False, "URL non valido"
+    if p.scheme != "https":
+        return False, "Per endpoint non locali è richiesto https://"
+    host = p.hostname
+    if not host:
+        return False, "Host mancante nell'URL"
+    try:
+        infos = socket.getaddrinfo(host, p.port or 443, proto=socket.IPPROTO_TCP)
+    except Exception as e:
+        return False, f"Risoluzione host fallita: {e}"
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return False, f"IP non consentito ({ip}) per un endpoint pubblico"
+    return True, ""
 
 def is_configured():
     cfg = get_ai_config()
@@ -215,6 +253,9 @@ def _client():
     except ImportError as e:
         raise RuntimeError("openai SDK non installato. Esegui: pip install openai") from e
     cfg = get_ai_config()
+    ok, why = is_safe_endpoint(cfg["base_url"])
+    if not ok:
+        raise RuntimeError(f"Endpoint AI non sicuro: {why}")
     key = cfg["api_key"]
     if not key:
         if is_local_endpoint(cfg["base_url"]):
@@ -222,7 +263,7 @@ def _client():
         else:
             raise RuntimeError("API key mancante. Configura in Impostazioni → AI.")
     try:
-        print(f"[AI] client url={cfg['base_url']} model={cfg['model']} key={key[:6]}...{key[-4:]} (len={len(key)})")
+        print(f"[AI] client url={cfg['base_url']} model={cfg['model']} key={'set' if key else 'none'}")
     except Exception:
         pass
     return OpenAI(base_url=cfg["base_url"], api_key=key), cfg["model"]

@@ -24,6 +24,7 @@ import pygetwindow as gw
 
 from db import get_conn, get_setting
 from modules import privacy, ai_assistant
+from modules.secrets import reveal_secret
 import i18n
 from config import (
     OCR_LANG, TESSERACT_CMD, AI_MAX_TOKENS, AI_CONTEXT_TOKENS,
@@ -168,7 +169,7 @@ def get_vision_config():
     enabled = (_get_setting("ai_vision_enabled", "0") or "0") == "1"
     base = (_get_setting("ai_vision_base_url", AI_VISION_BASE_URL_DEFAULT)
             or AI_VISION_BASE_URL_DEFAULT).strip()
-    key = (_get_setting("ai_vision_api_key", "") or "").strip()
+    key = reveal_secret(_get_setting("ai_vision_api_key", "") or "").strip()
     model = (_get_setting("ai_vision_model", AI_VISION_MODEL_DEFAULT)
              or AI_VISION_MODEL_DEFAULT).strip()
     return {
@@ -192,6 +193,9 @@ def _vision_client():
     except ImportError as e:
         raise RuntimeError("openai SDK non installato. Esegui: pip install openai") from e
     cfg = get_vision_config()
+    ok, why = ai_assistant.is_safe_endpoint(cfg["base_url"])
+    if not ok:
+        raise RuntimeError(f"Endpoint Vision non sicuro: {why}")
     key = cfg["api_key"]
     if not key:
         if ai_assistant.is_local_endpoint(cfg["base_url"]):
@@ -199,8 +203,7 @@ def _vision_client():
         else:
             raise RuntimeError("Vision API key mancante. Configura in Impostazioni → AI → Vision.")
     try:
-        print(f"[AskScreen] vision client url={cfg['base_url']} model={cfg['model']} "
-              f"key={key[:6]}...{key[-4:]} (len={len(key)})")
+        print(f"[AskScreen] vision client url={cfg['base_url']} model={cfg['model']} key={'set' if key else 'none'}")
     except Exception:
         pass
     return OpenAI(base_url=cfg["base_url"], api_key=key), cfg["model"]
