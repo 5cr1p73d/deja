@@ -3,8 +3,8 @@ import re
 import numpy as np
 
 from db import get_conn, vec_available, quantize_int8
-from config import EMBEDDING_MODEL, TOP_K_RESULTS, AUDIO_SEMANTIC_PENALTY, AUDIO_MIN_SCORE, SCREENSHOT_MIN_SCORE
-MIN_SCORE_AUDIO = AUDIO_MIN_SCORE
+import config  # AUDIO_MIN_SCORE / EMBEDDING_MODEL letti dinamicamente (vedi capturer.py)
+from config import TOP_K_RESULTS, AUDIO_SEMANTIC_PENALTY, SCREENSHOT_MIN_SCORE
 MIN_SCORE_SCREENSHOT = SCREENSHOT_MIN_SCORE
 
 _model = None
@@ -21,7 +21,7 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer(EMBEDDING_MODEL)
+        _model = SentenceTransformer(config.EMBEDDING_MODEL)
     return _model
 
 def invalidate_cache():
@@ -214,7 +214,7 @@ def query(text: str, top_k: int = None) -> list[dict]:
     if au_hits is not None:
         for aid, score in au_hits:
             if len(audio) >= sem_cap_au: break
-            if score < MIN_SCORE_AUDIO: continue
+            if score < config.AUDIO_MIN_SCORE: continue
             key = f"au_{aid}"
             if key in audio: continue
             row = c.execute(
@@ -224,7 +224,7 @@ def query(text: str, top_k: int = None) -> list[dict]:
             if row:
                 if text.lower() not in (row[2] or "").lower():
                     score *= AUDIO_SEMANTIC_PENALTY
-                if score < MIN_SCORE_AUDIO: continue
+                if score < config.AUDIO_MIN_SCORE: continue
                 audio[key] = {
                     "id": aid, "score": score, "ts": row[0],
                     "source": row[1], "transcript": row[2], "audio_data": row[3],
@@ -240,7 +240,7 @@ def query(text: str, top_k: int = None) -> list[dict]:
             for idx in idx_sorted:
                 if len(audio) >= sem_cap_au: break
                 score = float(sims[idx])
-                if score < MIN_SCORE_AUDIO: break
+                if score < config.AUDIO_MIN_SCORE: break
                 aid = int(au_ids[idx])
                 key = f"au_{aid}"
                 if key in audio: continue
@@ -251,7 +251,7 @@ def query(text: str, top_k: int = None) -> list[dict]:
                 if row:
                     if text.lower() not in (row[2] or "").lower():
                         score *= AUDIO_SEMANTIC_PENALTY
-                    if score < MIN_SCORE_AUDIO: continue
+                    if score < config.AUDIO_MIN_SCORE: continue
                     audio[key] = {
                         "id": aid, "score": score, "ts": row[0],
                         "source": row[1], "transcript": row[2], "audio_data": row[3],

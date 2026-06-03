@@ -7,7 +7,11 @@ import pytesseract
 import pygetwindow as gw
 from db import get_conn, get_setting
 from modules import privacy
-from config import CAPTURE_INTERVAL, OCR_LANG, TESSERACT_CMD
+import config
+from config import OCR_LANG, TESSERACT_CMD
+# NB: CAPTURE_INTERVAL si legge come config.CAPTURE_INTERVAL (dinamico): un
+# `from config import CAPTURE_INTERVAL` catturerebbe il default all'import,
+# ignorando il valore salvato applicato da load_settings_into_config.
 
 # Imposta il path solo se trovato; altrimenti pytesseract prova "tesseract" su PATH
 # e _ocr() degrada (ritorna "") senza far crashare la cattura.
@@ -90,7 +94,7 @@ def run(stop_event):
                 monitor = _get_active_monitor(sct)
                 app = _get_active_app()
                 if _should_skip_app(app):
-                    stop_event.wait(timeout=max(0, CAPTURE_INTERVAL - (time.time()-start)))
+                    stop_event.wait(timeout=max(0, config.CAPTURE_INTERVAL - (time.time()-start)))
                     continue
                 sct_img = sct.grab(monitor)
                 img = Image.frombytes("RGB", sct_img.size, sct_img.rgb)
@@ -108,6 +112,6 @@ def run(stop_event):
             # Errore transitorio (MSS/PIL/DB): logga e continua, non uccidere il thread.
             _log.exception("Errore nel ciclo capturer")
             print(f"[Capturer] Errore ciclo (continuo): {e}")
-        stop_event.wait(timeout=max(0, CAPTURE_INTERVAL - (time.time()-start)))
+        stop_event.wait(timeout=max(0, config.CAPTURE_INTERVAL - (time.time()-start)))
     conn.close()
     print("[Capturer] Fermato.")

@@ -3,7 +3,8 @@ import time
 import logging
 import numpy as np
 from db import get_conn
-from config import EMBEDDING_MODEL, INDEXER_BATCH, INDEXER_INTERVAL
+import config  # EMBEDDING_MODEL letto dinamicamente (vedi nota in capturer.py)
+from config import INDEXER_BATCH, INDEXER_INTERVAL
 
 log = logging.getLogger("deja.indexer")
 model = None
@@ -20,7 +21,7 @@ def _load_model(retries=3):
             # disattiva, senza far crashare l'app all'avvio.
             from sentence_transformers import SentenceTransformer
             print("[Indexer] Carico modello embedding (può scaricare al primo avvio)...")
-            model = SentenceTransformer(EMBEDDING_MODEL)
+            model = SentenceTransformer(config.EMBEDDING_MODEL)
             print("[Indexer] Modello caricato.")
             return True
         except Exception as e:

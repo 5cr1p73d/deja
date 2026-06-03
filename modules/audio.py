@@ -5,7 +5,8 @@ import pyaudiowpatch as pyaudio
 from datetime import datetime, timezone
 from scipy import signal as _spsig
 from db import get_conn
-from config import WHISPER_MODEL, AUDIO_CHUNK_SECONDS
+import config  # leggere config.X dinamicamente: un import by-value catturerebbe
+# i default ignorando i valori salvati (load_settings_into_config).
 import io
 import soundfile as sf
 
@@ -51,7 +52,7 @@ def _load_model(retries=3):
             # inizializzano sulla macchina dell'utente (WinError 1114).
             from faster_whisper import WhisperModel
             print("[Audio] Carico modello Whisper (può scaricare al primo avvio)...")
-            _model = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+            _model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8")
             print("[Audio] Modello caricato.")
             return True
         except Exception as e:
@@ -399,7 +400,7 @@ def run(stop_event):
     hot-swap device, e stream morti (watchdog). Gli stream restano aperti SOLO
     quando la cattura audio è abilitata e c'è almeno un device configurato.
     Il modello Whisper viene caricato pigramente alla prima attivazione."""
-    chunk_secs = AUDIO_CHUNK_SECONDS
+    chunk_secs = config.AUDIO_CHUNK_SECONDS
     pa = None
     streams, proc_threads = [], []
     model_loaded = False

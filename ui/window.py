@@ -436,8 +436,7 @@ class SettingsDialog(QDialog):
         self._score_spin = QSpinBox()
         self._score_spin.setRange(1, 99); self._score_spin.setSuffix("%")
         try:
-            from modules import search as _s
-            self._score_spin.setValue(int(getattr(_s, "MIN_SCORE_AUDIO", 0.25) * 100))
+            self._score_spin.setValue(int(getattr(_cfg, "AUDIO_MIN_SCORE", 0.25) * 100))
         except Exception: self._score_spin.setValue(25)
         row2.addWidget(lbl2); row2.addWidget(self._score_spin); row2.addStretch()
         tsl.addLayout(row2); tsl.addStretch()
@@ -881,8 +880,6 @@ class SettingsDialog(QDialog):
         try:
             val = self._score_spin.value() / 100.0
             save_setting("audio_min_score", val)
-            from modules import search as _s
-            _s.MIN_SCORE_AUDIO = val
             import config as _config_mod
             _config_mod.AUDIO_MIN_SCORE = val
         except Exception as e:
