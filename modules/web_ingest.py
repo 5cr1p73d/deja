@@ -12,6 +12,7 @@ Gate prima di inserire:
 - dedupe: stessa URL inserita di recente → scartata
 """
 import os
+import re
 import glob
 import json
 import time
@@ -27,6 +28,14 @@ _log = logging.getLogger("deja.web_ingest")
 
 _DEDUPE_MIN = 10      # stessa URL entro N minuti → non re-inserire
 _STALE_HOURS = 6      # file in coda più vecchi di così → scartati (no crescita infinita)
+
+# Difesa extra: scarta pagine di login/auth anche se arrivassero (privacy).
+_LOGIN_URL_RE = re.compile(
+    r"(/login|/log[_-]?in|/signin|/sign[_-]?in|/signup|/sign[_-]?up|/register|"
+    r"/create[_-]?account|/auth(/|$|\?)|/account/login|/sessions/new|"
+    r"accounts\.google\.|login\.microsoftonline|appleid\.apple\.|oauth|/sso)",
+    re.I,
+)
 
 
 def _inbox_dir() -> str:
@@ -64,6 +73,10 @@ def _process_file(conn, path):
 
     # Dominio escluso → scarta in silenzio.
     if web_bridge._domain_excluded(domain):
+        os.remove(path); return
+
+    # Difesa privacy: URL di login/auth → mai ingerire.
+    if _LOGIN_URL_RE.search(url):
         os.remove(path); return
 
     # Dedupe: stessa URL inserita negli ultimi N minuti.

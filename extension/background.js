@@ -95,6 +95,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     pushActive();
   } else if (msg.type === "page" && enabled) {
     // Inoltra il contenuto pagina all'host (che lo mette nello spool).
+    if (sender.tab && loginByTab[sender.tab.id]) return;  // tab di login: niente ingest
     const domain = (msg.page && msg.page.domain) || "";
     if (isExcluded(domain)) return;             // dominio escluso: niente ingest
     send({ type: "page", page: msg.page });

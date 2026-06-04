@@ -3,25 +3,20 @@
 // al background. Conservativo: nel dubbio segnala login=true (meglio saltare
 // un frame che catturare credenziali).
 (function () {
-  function hasVisiblePassword() {
-    const inputs = document.querySelectorAll('input[type="password"]');
-    for (const el of inputs) {
-      try {
-        const r = el.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0 && el.offsetParent !== null) return true;
-      } catch (e) {}
-    }
-    return false;
+  function hasPassword() {
+    // Conservativo: basta l'esistenza di un campo password nel DOM (anche se
+    // dietro un tab/nascosto) per considerare la pagina sensibile.
+    return !!document.querySelector('input[type="password"]');
   }
 
   function urlLooksLogin() {
     const u = (location.href || "").toLowerCase();
-    return /(\/login|\/log-in|\/signin|\/sign-in|\/signup|\/sign-up|\/register|\/registration|\/create-account|\/auth(\/|$)|\/account\/login|\/sessions\/new|accounts\.google\.|login\.microsoftonline|appleid\.apple\.|oauth|\/sso)/.test(u);
+    return /(\/login|\/log[_-]?in|\/signin|\/sign[_-]?in|\/signup|\/sign[_-]?up|\/register|\/registration|\/create[_-]?account|\/auth(\/|$|\?)|\/account\/login|\/sessions\/new|accounts\.google\.|login\.microsoftonline|appleid\.apple\.|oauth|\/sso|\/connexion|\/anmelden|\/iniciar-sesion)/.test(u);
   }
 
   let last = null;
   function check() {
-    const v = hasVisiblePassword() || urlLooksLogin();
+    const v = hasPassword() || urlLooksLogin();
     if (v !== last) {
       last = v;
       try { chrome.runtime.sendMessage({ type: "login", is_login: v }); } catch (e) {}
