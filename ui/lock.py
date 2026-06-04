@@ -4,16 +4,46 @@ Schermata di sblocco di Déjà (Windows Hello + PIN) e dialog di setup PIN.
 Riusa lo stile scuro dell'onboarding. Modale, stays-on-top.
 """
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QCursor, QGuiApplication
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QDialog, QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton,
 )
 
 import i18n
 from i18n import t
 from modules import applock
 
+
+def _force_foreground(win) -> None:
+    """Porta la finestra in primo piano forzandolo (AttachThreadInput trick),
+    così il prompt di Windows Hello compare centrato e sopra a tutto."""
+    try:
+        import ctypes
+        hwnd = int(win.winId())
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        HWND_TOPMOST = -1
+        SWP_NOSIZE = 0x0001
+        SWP_NOMOVE = 0x0002
+        user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE)
+        fg = user32.GetForegroundWindow()
+        cur_tid = kernel32.GetCurrentThreadId()
+        fg_tid = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+        if fg_tid and fg_tid != cur_tid:
+            user32.AttachThreadInput(fg_tid, cur_tid, True)
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        if fg_tid and fg_tid != cur_tid:
+            user32.AttachThreadInput(fg_tid, cur_tid, False)
+    except Exception:
+        pass
+
+
 _QSS = """
-QDialog { background:#0e0e12; }
+QDialog { background:transparent; }
+QWidget#backdrop { background:rgba(6,6,10,0.55); }
+QFrame#card { background:#0e0e12; border:1px solid rgba(255,255,255,0.10); border-radius:18px; }
 QLabel { color:#f3f4f6; background:transparent; }
 QLabel#muted { color:#8b8d98; font-size:12px; }
 QLabel#h1 { font-size:20px; font-weight:600; }
@@ -34,13 +64,34 @@ class LockDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setModal(True)
-        self.setMinimumWidth(420)
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setWindowFlags(
+            Qt.WindowType.Dialog
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(_QSS)
         self._unlocked = False
         self._fails = 0
 
-        root = QVBoxLayout(self)
+        # Overlay translucido a tutto schermo con una card centrata: il prompt
+        # di Windows Hello compare al centro, in sovraimpressione su tutto.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        backdrop = QWidget(); backdrop.setObjectName("backdrop")
+        outer.addWidget(backdrop)
+
+        center = QVBoxLayout(backdrop)
+        center.addStretch()
+        crow = QHBoxLayout()
+        crow.addStretch()
+        card = QFrame(); card.setObjectName("card"); card.setFixedWidth(440)
+        crow.addWidget(card)
+        crow.addStretch()
+        center.addLayout(crow)
+        center.addStretch()
+
+        root = QVBoxLayout(card)
         root.setContentsMargins(32, 28, 32, 24)
         root.setSpacing(12)
 
@@ -88,11 +139,19 @@ class LockDialog(QDialog):
         elif self._use_pin:
             QTimer.singleShot(0, self.pin.setFocus)
 
+    def _fit_to_cursor_screen(self):
+        scr = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        if scr:
+            self.setGeometry(scr.geometry())
+
     def showEvent(self, e):
         super().showEvent(e)
+        self._fit_to_cursor_screen()
         self.raise_(); self.activateWindow()
+        _force_foreground(self)
 
     def _try_hello(self):
+        _force_foreground(self)
         if applock.hello_verify(t("lock.hello_msg")):
             self._unlocked = True
             self.accept()
