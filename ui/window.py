@@ -36,6 +36,34 @@ try:
 except Exception:
     _cfg = None
 
+# ── Font UI ────────────────────────────────────────────────────────
+# Risolto a runtime sul font più elegante disponibile (resolve_ui_font),
+# poi usato da tutti i QFont(UI_FONT, ...) e applicato all'app.
+UI_FONT = "Segoe UI"
+
+
+def resolve_ui_font(app=None):
+    """Sceglie il miglior font UI disponibile e lo applica all'app.
+    Da chiamare dopo aver creato QApplication, prima di costruire la UI."""
+    global UI_FONT
+    try:
+        from PyQt6.QtGui import QFontDatabase
+        fams = set(QFontDatabase.families())
+        for cand in ("Inter", "Segoe UI Variable Text", "Segoe UI Variable",
+                     "Segoe UI", "Selawik", "Arial"):
+            if cand in fams:
+                UI_FONT = cand
+                break
+    except Exception:
+        pass
+    if app is not None:
+        try:
+            f = app.font(); f.setFamily(UI_FONT); app.setFont(f)
+        except Exception:
+            pass
+    return UI_FONT
+
+
 # ── Palette & Dimensioni ──────────────────────────────────────────
 OVERLAY_W = 960
 OVERLAY_H_COMPACT = 76
@@ -728,7 +756,7 @@ class SettingsDialog(FramelessDialog):
         test_row.addWidget(self._ai_test_btn)
 
         self._ai_test_status = QLabel("")
-        self._ai_test_status.setFont(QFont("Segoe UI", 10))
+        self._ai_test_status.setFont(QFont(UI_FONT, 10))
         self._ai_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
         self._ai_test_status.setWordWrap(True)
         test_row.addWidget(self._ai_test_status, stretch=1)
@@ -805,7 +833,7 @@ class SettingsDialog(FramelessDialog):
         vtest_row.addWidget(self._vis_test_btn)
 
         self._vis_test_status = QLabel("")
-        self._vis_test_status.setFont(QFont("Segoe UI", 10))
+        self._vis_test_status.setFont(QFont(UI_FONT, 10))
         self._vis_test_status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
         self._vis_test_status.setWordWrap(True)
         vtest_row.addWidget(self._vis_test_status, stretch=1)
@@ -1409,7 +1437,7 @@ class MinimalItemDelegate(QStyledItemDelegate):
             rect = QRectF(option.rect).adjusted(8, 6, -8, -2)
             text = index.data(Qt.ItemDataRole.DisplayRole) or ""
             painter.setPen(QColor(TEXT_SECONDARY))
-            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            painter.setFont(QFont(UI_FONT, 8, QFont.Weight.Bold))
             painter.drawText(rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
             # Linea sottile sotto label
             painter.setPen(QPen(QColor(255, 255, 255, 12), 1.0))
@@ -1504,7 +1532,7 @@ class MinimalItemDelegate(QStyledItemDelegate):
             painter.drawEllipse(QPointF(icon_cx, icon_cy), 14.5, 14.5)
             initial = _app_initial(first_line)
             painter.setPen(QColor(255, 255, 255, 240 if is_sel else 220))
-            painter.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+            painter.setFont(QFont(UI_FONT, 11, QFont.Weight.Bold))
             painter.drawText(QRectF(icon_cx - 12, icon_cy - 12, 24, 24),
                              Qt.AlignmentFlag.AlignCenter, initial)
 
@@ -1520,13 +1548,13 @@ class MinimalItemDelegate(QStyledItemDelegate):
         lines = display.split("\n", 1)
 
         painter.setPen(QColor("#ffffff") if is_sel else QColor("#e6e6ec"))
-        painter.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
+        painter.setFont(QFont(UI_FONT, 11, QFont.Weight.DemiBold))
         painter.drawText(QRectF(tx, title_y, tw, self.TITLE_H),
                          Qt.AlignmentFlag.AlignVCenter, lines[0] if lines else "")
 
         if len(lines) > 1:
             painter.setPen(QColor(cat_r, cat_g, cat_b, 245) if is_sel else QColor(TEXT_SECONDARY))
-            painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
+            painter.setFont(QFont(UI_FONT, 9, QFont.Weight.Medium))
             painter.drawText(QRectF(tx, sub_y, tw, self.SUB_H),
                              Qt.AlignmentFlag.AlignVCenter, lines[1])
 
@@ -1879,7 +1907,7 @@ class Toast(QWidget):
 
         text_lbl = QLabel(message)
         text_lbl.setWordWrap(True)
-        text_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
+        text_lbl.setFont(QFont(UI_FONT, 10, QFont.Weight.Medium))
         text_lbl.setStyleSheet("color:#f3f4f6; background:transparent;")
         lay.addWidget(text_lbl)
 
@@ -1955,7 +1983,7 @@ class AIAnswerCard(QWidget):
         head = QHBoxLayout(); head.setSpacing(8)
         # Badge con punto pulsante
         self._badge = QLabel("✦  Déjà · sintesi")
-        self._badge.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self._badge.setFont(QFont(UI_FONT, 10, QFont.Weight.DemiBold))
         self._badge.setStyleSheet(f"color:{C_AI_HEX}; background:transparent; letter-spacing:0.6px;")
         head.addWidget(self._badge); head.addStretch()
         self._toggle = QPushButton("−")
@@ -1973,7 +2001,7 @@ class AIAnswerCard(QWidget):
         self._text = QLabel(t("win.sum_reading"))
         self._text.setWordWrap(True)
         self._text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._text.setFont(QFont("Segoe UI", 11))
+        self._text.setFont(QFont(UI_FONT, 11))
         self._text.setStyleSheet("color:#ebebef; background:transparent;")
         v.addWidget(self._text)
 
@@ -2064,7 +2092,7 @@ def _make_bubble(text, kind):
     lbl.setWordWrap(True)
     lbl.setMaximumWidth(580)
     lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-    lbl.setFont(QFont("Segoe UI", 11))
+    lbl.setFont(QFont(UI_FONT, 11))
 
     if kind == "user":
         lbl.setStyleSheet(
@@ -2188,12 +2216,12 @@ class EmbedScreenshotCard(_EmbedCardBase):
 
         app_short = app if len(app) <= 36 else app[:33] + "…"
         app_lbl = QLabel(app_short)
-        app_lbl.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        app_lbl.setFont(QFont(UI_FONT, 10, QFont.Weight.DemiBold))
         app_lbl.setStyleSheet("color:#e6e6ec; background:transparent;")
         info_lay.addWidget(app_lbl)
 
         ts_lbl = QLabel(_human_ago(ts))
-        ts_lbl.setFont(QFont("Segoe UI", 9))
+        ts_lbl.setFont(QFont(UI_FONT, 9))
         ts_lbl.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
         info_lay.addWidget(ts_lbl)
         h.addLayout(info_lay, stretch=1)
@@ -2249,7 +2277,7 @@ class EmbedAudioCard(_EmbedCardBase):
         snippet = transcript.replace("\n", " ").strip()
         snippet = snippet if len(snippet) <= 80 else snippet[:77] + "…"
         tr_lbl = QLabel(snippet or t("win.card_no_text"))
-        tr_lbl.setFont(QFont("Segoe UI", 10))
+        tr_lbl.setFont(QFont(UI_FONT, 10))
         tr_lbl.setStyleSheet("color:#e6e6ec; background:transparent;")
         tr_lbl.setWordWrap(False)
         info_lay.addWidget(tr_lbl)
@@ -2298,7 +2326,7 @@ class AssistantTurnBubble(QWidget):
         lbl = QLabel(html)
         lbl.setWordWrap(True)
         lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        lbl.setFont(QFont("Segoe UI", 11))
+        lbl.setFont(QFont(UI_FONT, 11))
         lbl.setTextFormat(Qt.TextFormat.RichText)
         lbl.setStyleSheet("color:#ebebef; background:transparent; border:none;")
         self.inner.addWidget(lbl)
@@ -2322,7 +2350,7 @@ class ChatPage(QWidget):
         # Header
         head = QHBoxLayout(); head.setSpacing(10)
         title = QLabel(t("win.chat_title"))
-        title.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
+        title.setFont(QFont(UI_FONT, 12, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C_AI_HEX}; background:transparent; letter-spacing:1px;")
         head.addWidget(title); head.addStretch()
         self.new_chat_btn = QPushButton(t("win.chat_new"))
@@ -2356,17 +2384,17 @@ class ChatPage(QWidget):
         self.empty_state = QWidget(); self.empty_state.setStyleSheet("background:transparent;")
         es = QVBoxLayout(self.empty_state); es.setAlignment(Qt.AlignmentFlag.AlignCenter); es.setSpacing(10)
         es_icon = QLabel("◆"); es_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        es_icon.setFont(QFont("Segoe UI", 28))
+        es_icon.setFont(QFont(UI_FONT, 28))
         es_icon.setStyleSheet(f"color:{C_AI_HEX}; background:transparent;")
         es.addWidget(es_icon)
         es_t = QLabel(t("win.chat_empty_title"))
         es_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        es_t.setFont(QFont("Segoe UI", 13, QFont.Weight.Medium))
+        es_t.setFont(QFont(UI_FONT, 13, QFont.Weight.Medium))
         es_t.setStyleSheet("color:#e5e7eb; background:transparent;")
         es.addWidget(es_t)
         es_s = QLabel(t("win.chat_empty_sub"))
         es_s.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        es_s.setFont(QFont("Segoe UI", 10))
+        es_s.setFont(QFont(UI_FONT, 10))
         es_s.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; line-height:1.6;")
         es.addWidget(es_s)
         self.msg_layout.insertWidget(0, self.empty_state)
@@ -2375,7 +2403,7 @@ class ChatPage(QWidget):
         input_row = QHBoxLayout(); input_row.setSpacing(8)
         self.input = QLineEdit()
         self.input.setPlaceholderText(t("win.chat_placeholder"))
-        self.input.setFont(QFont("Segoe UI", 11))
+        self.input.setFont(QFont(UI_FONT, 11))
         self.input.setFixedHeight(38)
         self.input.setStyleSheet(
             "QLineEdit{background:rgba(255,255,255,0.04); color:#f3f4f6; "
@@ -2466,7 +2494,7 @@ class ChatPage(QWidget):
         self._hide_empty()
         notice = QLabel(text); notice.setWordWrap(True)
         notice.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        notice.setFont(QFont("Segoe UI", 11))
+        notice.setFont(QFont(UI_FONT, 11))
         notice.setStyleSheet(
             f"color:{TEXT_SECONDARY}; background:rgba(255,255,255,0.02); "
             f"border:1px dashed {BORDER_STR}; border-radius:10px; padding:14px;"
@@ -2505,7 +2533,7 @@ class DiaryDialog(FramelessDialog):
 
         head = QHBoxLayout(); head.setSpacing(8)
         title = QLabel(t("win.diary_header"))
-        title.setFont(QFont("Segoe UI", 14, QFont.Weight.DemiBold))
+        title.setFont(QFont(UI_FONT, 14, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C_AI_HEX}; background:transparent; letter-spacing:1px;")
         head.addWidget(title); head.addStretch()
 
@@ -2555,7 +2583,7 @@ class DiaryDialog(FramelessDialog):
         self.content_label = QLabel()
         self.content_label.setWordWrap(True)
         self.content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.content_label.setFont(QFont("Segoe UI", 11))
+        self.content_label.setFont(QFont(UI_FONT, 11))
         self.content_label.setStyleSheet("color:#e6e6ec; background:transparent; padding:18px;")
         self.content_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.content_label.setTextFormat(Qt.TextFormat.RichText)
@@ -2646,12 +2674,12 @@ class ContextDialog(FramelessDialog):
         root = self.body; root.setContentsMargins(20, 6, 20, 16); root.setSpacing(10)
 
         title = QLabel(t("win.ctx_header", min=window_min))
-        title.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
+        title.setFont(QFont(UI_FONT, 12, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C_AI_HEX}; background:transparent; letter-spacing:0.5px;")
         root.addWidget(title)
 
         sub = QLabel(t("win.ctx_around", label=pivot_label))
-        sub.setFont(QFont("Segoe UI", 10))
+        sub.setFont(QFont(UI_FONT, 10))
         sub.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
         sub.setWordWrap(True)
         root.addWidget(sub)
@@ -2762,7 +2790,7 @@ class FullscreenViewer(QDialog):
         for txt, size, color in [(info, 12, "#ffffff"), (t("win.fs_press_esc"), 9, TEXT_SECONDARY)]:
             lbl = QLabel(txt)
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setFont(QFont("Segoe UI", size, QFont.Weight.Medium))
+            lbl.setFont(QFont(UI_FONT, size, QFont.Weight.Medium))
             lbl.setStyleSheet(f"color:{color}; background:transparent;")
             lay.addWidget(lbl)
 
@@ -2909,7 +2937,7 @@ class AskScreenDialog(FramelessDialog):
         # Header
         head = QHBoxLayout(); head.setSpacing(8)
         title = QLabel(t("win.ask_header"))
-        title.setFont(QFont("Segoe UI", 13, QFont.Weight.DemiBold))
+        title.setFont(QFont(UI_FONT, 13, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C_AI_HEX}; background:transparent; letter-spacing:0.5px;")
         head.addWidget(title)
 
@@ -2988,7 +3016,7 @@ class AskScreenDialog(FramelessDialog):
         self.answer_label = QLabel()
         self.answer_label.setWordWrap(True)
         self.answer_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.answer_label.setFont(QFont("Segoe UI", 11))
+        self.answer_label.setFont(QFont(UI_FONT, 11))
         self.answer_label.setStyleSheet("color:#e6e6ec; background:transparent; padding:14px;")
         self.answer_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.answer_label.setTextFormat(Qt.TextFormat.RichText)
@@ -3264,7 +3292,7 @@ class DejaWindow(QWidget):
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(t("win.main_search_ph"))
-        self.search_input.setFont(QFont("Segoe UI", 16, QFont.Weight.Normal))
+        self.search_input.setFont(QFont(UI_FONT, 16, QFont.Weight.Normal))
         self.search_input.setStyleSheet(
             f"QLineEdit{{border:none; background:transparent; color:{TEXT_PRIMARY}; "
             f"selection-background-color:rgba(167,139,250,0.35); selection-color:#ffffff;}}"
@@ -3317,7 +3345,7 @@ class DejaWindow(QWidget):
         # ── Status ─────────────────────────────────────────────────
         self.status = QLabel(); self.status.setFixedHeight(22)
         self.status.setContentsMargins(24, 6, 0, 0)
-        self.status.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
+        self.status.setFont(QFont(UI_FONT, 9, QFont.Weight.Medium))
         self.status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; letter-spacing:1px;")
         self.status.hide(); root.addWidget(self.status)
 
@@ -3347,11 +3375,11 @@ class DejaWindow(QWidget):
         sb_layout = QVBoxLayout(self._sidebar); sb_layout.setContentsMargins(10, 8, 10, 16); sb_layout.setSpacing(10)
 
         # Titolo sidebar
-        sb_title = QLabel("DÉJÀ"); sb_title.setFont(QFont("Segoe UI", 19, QFont.Weight.Bold))
+        sb_title = QLabel("DÉJÀ"); sb_title.setFont(QFont(UI_FONT, 19, QFont.Weight.Bold))
         sb_title.setStyleSheet(f"color:#f3f4f6; background:transparent; letter-spacing:5px;")
         sb_title.setAlignment(Qt.AlignmentFlag.AlignCenter); sb_layout.addWidget(sb_title)
 
-        sb_sub = QLabel(t("win.sb_subtitle")); sb_sub.setFont(QFont("Segoe UI", 8))
+        sb_sub = QLabel(t("win.sb_subtitle")); sb_sub.setFont(QFont(UI_FONT, 8))
         sb_sub.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; letter-spacing:3px;")
         sb_sub.setAlignment(Qt.AlignmentFlag.AlignCenter); sb_layout.addWidget(sb_sub)
 
@@ -3372,7 +3400,7 @@ class DejaWindow(QWidget):
             "border:1px solid rgba(255,255,255,0.05); border-radius:10px;}"
         )
         stats_lay = QVBoxLayout(stats_wrap); stats_lay.setContentsMargins(12, 10, 12, 10)
-        self._sb_stats = QLabel("—"); self._sb_stats.setFont(QFont("Segoe UI", 10))
+        self._sb_stats = QLabel("—"); self._sb_stats.setFont(QFont(UI_FONT, 10))
         self._sb_stats.setStyleSheet(f"color:#d1d5db; background:transparent; border:none;")
         self._sb_stats.setWordWrap(True); stats_lay.addWidget(self._sb_stats)
         sb_layout.addWidget(stats_wrap)
@@ -3416,7 +3444,7 @@ class DejaWindow(QWidget):
         sb_sep_apps.setStyleSheet("background:rgba(255,255,255,0.06); max-height:1px;")
         sb_layout.addWidget(sb_sep_apps)
         apps_lbl = QLabel(t("win.sb_apps"))
-        apps_lbl.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        apps_lbl.setFont(QFont(UI_FONT, 8, QFont.Weight.Bold))
         apps_lbl.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; letter-spacing:2px; padding-left:2px;")
         sb_layout.addWidget(apps_lbl)
 
@@ -3483,7 +3511,7 @@ class DejaWindow(QWidget):
 
         self.preview_info = QLabel(); self.preview_info.setFixedHeight(18)
         self.preview_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_info.setFont(QFont("Segoe UI", 10, QFont.Weight.Medium))
+        self.preview_info.setFont(QFont(UI_FONT, 10, QFont.Weight.Medium))
         self.preview_info.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; letter-spacing:0.5px;")
         pv_layout.addWidget(self.preview_info)
 
@@ -3549,10 +3577,10 @@ class DejaWindow(QWidget):
         ap_layout.addWidget(self.audio_slider)
         time_row = QHBoxLayout(); time_row.setContentsMargins(2, 0, 2, 0)
         self.audio_time_cur = QLabel("0:00")
-        self.audio_time_cur.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
+        self.audio_time_cur.setFont(QFont(UI_FONT, 9, QFont.Weight.Medium))
         self.audio_time_cur.setStyleSheet(f"color:{C_AUDIO_HEX}; background:transparent;")
         self.audio_time_total = QLabel("0:00")
-        self.audio_time_total.setFont(QFont("Segoe UI", 9))
+        self.audio_time_total.setFont(QFont(UI_FONT, 9))
         self.audio_time_total.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.audio_time_total.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
         time_row.addWidget(self.audio_time_cur); time_row.addStretch(); time_row.addWidget(self.audio_time_total)
@@ -4645,7 +4673,7 @@ class DejaWindow(QWidget):
                           " QLabel{color:#f3f4f6; background:transparent;}")
         v = QVBoxLayout(dlg); v.setContentsMargins(22, 18, 22, 16); v.setSpacing(10)
         title = QLabel(t("win.dr_header"))
-        title.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
+        title.setFont(QFont(UI_FONT, 12, QFont.Weight.DemiBold))
         title.setStyleSheet(f"color:{C_AI_HEX};"); v.addWidget(title)
         from_row = QHBoxLayout(); from_row.addWidget(QLabel(t("win.dr_from")))
         d_from = QDateEdit(); d_from.setCalendarPopup(True); d_from.setDate(QDate.currentDate().addDays(-7))

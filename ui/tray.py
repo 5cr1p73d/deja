@@ -1,7 +1,7 @@
 # ui/tray.py
 import io
 import re
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance
+from PIL import Image, ImageDraw, ImageFont
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtCore import QTimer
@@ -74,18 +74,27 @@ def _drawn_tray_icon(paused=False):
 
 
 def _make_tray_icon(paused=False):
-    """Icona del tray = logo dell'app (`assets/icon.png`, lo stesso del README).
-    In pausa viene desaturata e attenuata. Fallback al disegno se l'asset manca."""
-    try:
-        img = Image.open(paths.resource_path("assets/icon.png")).convert("RGBA")
-    except Exception:
-        return _drawn_tray_icon(paused)
+    """Icona del tray = solo il mark a cerchi del logo (niente tile di sfondo),
+    su fondo trasparente. In pausa: toni grigi attenuati."""
+    S = 256
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
     if paused:
-        alpha = img.getchannel("A")
-        gray = ImageOps.grayscale(img.convert("RGB"))
-        gray = ImageEnhance.Brightness(gray).enhance(0.7)
-        img = gray.convert("RGBA")
-        img.putalpha(alpha)
+        outer = (120, 120, 132, 210); ring = (110, 110, 122, 255); dotc = (150, 150, 160, 255)
+    else:
+        outer = (150, 141, 255, 210); ring = (124, 112, 250, 255); dotc = (190, 182, 255, 255)
+
+    def circle(bbox, outline, width):
+        d.ellipse(bbox, outline=outline, width=width)
+
+    # Anello esterno sottile
+    circle([30, 30, S - 30, S - 30], outer, 7)
+    # Anello viola spesso
+    circle([74, 74, S - 74, S - 74], ring, 24)
+    # Pallino centrale
+    r = 30
+    d.ellipse([S // 2 - r, S // 2 - r, S // 2 + r, S // 2 + r], fill=dotc)
+
     buf = io.BytesIO(); img.save(buf, format="PNG")
     pixmap = QPixmap(); pixmap.loadFromData(buf.getvalue())
     return QIcon(pixmap)

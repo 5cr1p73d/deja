@@ -128,6 +128,13 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    # Font UI elegante applicato a tutta l'app (prima di costruire la UI).
+    try:
+        from ui.window import resolve_ui_font
+        resolve_ui_font(app)
+    except Exception:
+        logging.getLogger("deja").exception("resolve_ui_font fallita (proseguo)")
+
     # Cifratura a riposo: migra un eventuale deja.db in chiaro a SQLCipher
     # PRIMA di aprire qualsiasi connessione. Degrada in silenzio se non
     # disponibile (DPAPI/SQLCipher assenti).
