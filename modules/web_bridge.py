@@ -23,7 +23,9 @@ _log = logging.getLogger("deja")
 # piano c'è un browser: la tab attiva dell'estensione = ciò che è a schermo.
 _BROWSERS = {
     "chrome.exe", "msedge.exe", "brave.exe", "opera.exe", "opera_gx.exe",
-    "vivaldi.exe", "firefox.exe", "browser.exe",
+    "vivaldi.exe", "firefox.exe", "browser.exe", "comet.exe", "arc.exe",
+    "zen.exe", "floorp.exe", "librewolf.exe", "waterfox.exe", "thorium.exe",
+    "chromium.exe", "brave-browser.exe", "yandex.exe", "dragon.exe",
 }
 
 # s: oltre, lo stato è stantio (browser chiuso) → ignora. Tollerante perché
@@ -129,8 +131,21 @@ def _foreground_exe() -> str:
         return ""
 
 
+def _browser_set() -> set:
+    """Lista browser nota + eventuali exe extra aggiunti dall'utente
+    (setting `web_browsers_extra`, separati da virgola) — così un browser nuovo
+    non rompe la feature."""
+    extra = (get_setting("web_browsers_extra", "") or "")
+    out = set(_BROWSERS)
+    for e in extra.replace("\n", ",").split(","):
+        e = e.strip().lower()
+        if e:
+            out.add(e if e.endswith(".exe") else e + ".exe")
+    return out
+
+
 def is_browser_foreground() -> bool:
-    return _foreground_exe() in _BROWSERS
+    return _foreground_exe() in _browser_set()
 
 
 # ── Decisione ──────────────────────────────────────────────────────
