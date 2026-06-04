@@ -137,9 +137,9 @@ def _find_hello_window():
         return None
 
 
-def _center_hello_prompt() -> bool:
+def _center_hello_prompt():
     """Sposta il prompt di Windows Hello al centro dello schermo sotto il
-    cursore (nasce in alto a sinistra). Ritorna True se spostata."""
+    cursore (nasce in alto a sinistra). Ritorna (w, h) se spostata, else None."""
     try:
         import ctypes
         from ctypes import wintypes
@@ -147,14 +147,14 @@ def _center_hello_prompt() -> bool:
 
         hwnd = _find_hello_window()
         if not hwnd:
-            return False
+            return None
 
         rect = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
         w = rect.right - rect.left
         h = rect.bottom - rect.top
         if w <= 0 or h <= 0:
-            return False
+            return None
 
         pt = wintypes.POINT()
         user32.GetCursorPos(ctypes.byref(pt))
@@ -177,9 +177,9 @@ def _center_hello_prompt() -> bool:
         SWP_NOSIZE = 0x0001
         SWP_SHOWWINDOW = 0x0040
         user32.SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW)
-        return True
+        return (w, h)
     except Exception:
-        return False
+        return None
 
 
 _QSS = """
@@ -229,6 +229,7 @@ class LockDialog(QDialog):
         if self._use_hello:
             self.hello_btn = QPushButton("👤 " + t("lock.hello")); self.hello_btn.setObjectName("primary")
             self.hello_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.hello_btn.setAutoDefault(False); self.hello_btn.setDefault(False)
             self.hello_btn.clicked.connect(self._try_hello)
             root.addWidget(self.hello_btn)
 
@@ -246,6 +247,7 @@ class LockDialog(QDialog):
         if self._use_pin:
             self.unlock_btn = QPushButton(t("lock.unlock")); self.unlock_btn.setObjectName("primary")
             self.unlock_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.unlock_btn.setAutoDefault(False); self.unlock_btn.setDefault(False)
             self.unlock_btn.clicked.connect(self._try_pin)
             foot.addWidget(self.unlock_btn)
         root.addLayout(foot)
@@ -322,6 +324,9 @@ class LockDialog(QDialog):
 
         self._center_tries = 0
         self._win_seen = set()
+        self._last_size = None
+        self._stable = 0
+        self._centered_done = False
         self._center_timer = QTimer(self)
         self._center_timer.timeout.connect(self._tick_center)
         self._center_timer.start(100)
@@ -336,9 +341,21 @@ class LockDialog(QDialog):
         # il prompt non viene centrato sappiamo exe/classe reali del broker.
         if self._center_tries <= 30:
             _dump_new_windows(self._win_seen)
-        # Ri-centra a ogni tick: il broker si ri-dispone dopo l'apertura.
-        # Smetti dopo ~10s come backstop (di norma lo ferma _tick_hello_done).
-        _center_hello_prompt()
+        if self._centered_done:
+            self._center_timer.stop()
+            return
+        # Centra finché la dimensione del prompt si stabilizza (il broker si
+        # ri-dispone dopo lo spawn), poi SMETTI: così l'utente può spostarlo.
+        size = _center_hello_prompt()
+        if size:
+            if size == self._last_size:
+                self._stable += 1
+            else:
+                self._stable = 0
+                self._last_size = size
+            if self._stable >= 2:
+                self._centered_done = True
+                self._center_timer.stop()
         if self._center_tries > 100:
             self._center_timer.stop()
 
