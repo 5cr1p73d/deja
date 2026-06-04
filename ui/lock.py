@@ -415,9 +415,26 @@ class LockDialog(FramelessDialog):
         super().reject()
 
 
+# Un solo LockDialog alla volta: premere più volte l'hotkey (o aprire più
+# percorsi protetti) non deve impilare più prompt di Windows Hello.
+_active_dialog = None
+
+
 def require_unlock(parent=None) -> bool:
+    global _active_dialog
+    if _active_dialog is not None:
+        # Sblocco già in corso: porta davanti quello esistente, non aprirne un altro.
+        try:
+            _active_dialog.raise_(); _active_dialog.activateWindow()
+        except Exception:
+            pass
+        return False
     dlg = LockDialog(parent)
-    dlg.exec()
+    _active_dialog = dlg
+    try:
+        dlg.exec()
+    finally:
+        _active_dialog = None
     return bool(getattr(dlg, "_unlocked", False))
 
 

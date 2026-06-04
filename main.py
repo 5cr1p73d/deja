@@ -139,6 +139,20 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    # Istanza singola: se Déjà è già in esecuzione, esci subito (evita doppio
+    # tray, doppio onboarding e DOPPI prompt di Windows Hello). Su Windows il
+    # segmento si libera da solo alla chiusura del processo (anche se crasha).
+    try:
+        from PyQt6.QtCore import QSharedMemory
+        _single = QSharedMemory("Deja_SingleInstance_v1")
+        if _single.attach():
+            logging.getLogger("deja").info("Istanza già attiva: esco.")
+            return
+        _single.create(1)
+        app._single_instance = _single  # mantieni vivo per tutta la durata
+    except Exception:
+        logging.getLogger("deja").exception("single-instance check fallito (proseguo)")
+
     # Font UI elegante applicato a tutta l'app (prima di costruire la UI).
     try:
         from ui.window import resolve_ui_font
