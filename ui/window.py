@@ -20,7 +20,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QFont, QPixmap, QColor, QPainter, QPainterPath, QBrush,
-    QRegion, QPen, QLinearGradient, QRadialGradient, QKeyEvent
+    QRegion, QPen, QLinearGradient, QRadialGradient, QKeyEvent, QIcon
 )
 
 from db import get_conn
@@ -456,6 +456,7 @@ class SettingsDialog(FramelessDialog):
         self._nav = QListWidget(); self._nav.setObjectName("nav")
         self._nav.setFixedWidth(188)
         self._nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._nav.setIconSize(QSize(18, 18))
         body.addWidget(self._nav)
         self._stack = QStackedWidget(); body.addWidget(self._stack, stretch=1)
         self._page_index = {}
@@ -478,7 +479,8 @@ class SettingsDialog(FramelessDialog):
             else:
                 page = w
             self._page_index[key] = self._stack.addWidget(page)
-            self._nav.addItem(QListWidgetItem(f"{icon}   {label}"))
+            item = QListWidgetItem(self._nav_icon(key), f"  {label}")
+            self._nav.addItem(item)
 
         def _field(parent_lay, label, widget, w=160):
             row = QHBoxLayout(); row.setSpacing(12)
@@ -999,6 +1001,61 @@ class SettingsDialog(FramelessDialog):
             cap.setText("✗ " + msg)
             if dl is not None:
                 dl.setEnabled(True)
+
+    # ── Icone sidebar: minimal, monocrome, disegnate a mano ────────
+    @staticmethod
+    def _nav_icon(key, color="#b9b9c4", size=18):
+        pm = QPixmap(size, size); pm.fill(QColor(0, 0, 0, 0))
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        col = QColor(color)
+        pen = QPen(col); pen.setWidthF(1.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen); p.setBrush(Qt.BrushStyle.NoBrush)
+
+        def dot(x, y, r):
+            p.setBrush(col); p.drawEllipse(QPointF(x, y), r, r)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+
+        def poly(pts, close=True):
+            path = QPainterPath(); path.moveTo(*pts[0])
+            for x, y in pts[1:]:
+                path.lineTo(x, y)
+            if close:
+                path.closeSubpath()
+            p.drawPath(path)
+
+        if key == "general":          # cursori
+            p.drawLine(QPointF(3, 6.6), QPointF(15, 6.6))
+            p.drawLine(QPointF(3, 11.4), QPointF(15, 11.4))
+            dot(11.5, 6.6, 2.1); dot(6.5, 11.4, 2.1)
+        elif key == "capture":        # monitor
+            p.drawRoundedRect(QRectF(3.2, 4.3, 11.6, 8.0), 2, 2)
+            p.drawLine(QPointF(9, 12.3), QPointF(9, 14))
+            p.drawLine(QPointF(6, 14), QPointF(12, 14))
+        elif key == "privacy":        # scudo
+            poly([(9, 2.5), (15, 4.5), (15, 8.6), (9, 15.5), (3, 8.6), (3, 4.5)])
+        elif key == "ai":             # scintilla
+            poly([(9, 2.5), (10.3, 7.7), (15.5, 9), (10.3, 10.3),
+                  (9, 15.5), (7.7, 10.3), (2.5, 9), (7.7, 7.7)])
+        elif key == "vision":         # occhio
+            p.drawEllipse(QRectF(2.5, 5.7, 13, 6.6)); dot(9, 9, 2.0)
+        elif key == "security":       # lucchetto
+            p.drawArc(QRectF(5.5, 3.2, 7, 8), 0, 180 * 16)
+            p.drawRoundedRect(QRectF(4.4, 8.4, 9.2, 6.2), 1.6, 1.6)
+            dot(9, 11, 1.0)
+        elif key == "models":         # cubo
+            p.drawRect(QRectF(4.3, 7.4, 7, 7))
+            for a, b in [((4.3, 7.4), (7.4, 4.4)), ((7.4, 4.4), (14.4, 4.4)),
+                         ((14.4, 4.4), (11.3, 7.4)), ((14.4, 4.4), (14.4, 11.4)),
+                         ((14.4, 11.4), (11.3, 14.4))]:
+                p.drawLine(QPointF(*a), QPointF(*b))
+        elif key == "info":           # info
+            p.drawEllipse(QRectF(3, 3, 12, 12)); dot(9, 6, 1.0)
+            p.drawLine(QPointF(9, 8.4), QPointF(9, 12.6))
+        p.end()
+        return QIcon(pm)
 
     def _maybe_autodetect_models(self):
         """Se l'endpoint è configurato (key o locale), interroga i modelli disponibili

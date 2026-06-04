@@ -1,7 +1,7 @@
 # ui/tray.py
 import io
 import re
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageEnhance
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtCore import QTimer
@@ -46,9 +46,8 @@ def _load_font(size):
             continue
     return ImageFont.load_default()
 
-def _make_tray_icon(paused=False):
-    """Icona vettoriale-like: disco brand con 'D' centrata, anello sottile,
-    pallino REC quando attivo. Disegnata a 256px e ridotta da Qt (bordi netti)."""
+def _drawn_tray_icon(paused=False):
+    """Fallback disegnato se l'asset non è disponibile: disco brand con 'D'."""
     S = 256
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -59,7 +58,6 @@ def _make_tray_icon(paused=False):
     pad = 16
     d.ellipse([pad, pad, S - pad, S - pad], fill=fill)
     d.ellipse([pad, pad, S - pad, S - pad], outline=ring, width=5)
-    # "D" centrata
     f = _load_font(148)
     try:
         bb = d.textbbox((0, 0), "D", font=f)
@@ -68,9 +66,26 @@ def _make_tray_icon(paused=False):
     except Exception:
         d.text((S / 2 - 40, S / 2 - 60), "D", fill=txt)
     if not paused:
-        # Pallino REC con alone scuro per stacco dallo sfondo
         d.ellipse([S - 90, S - 90, S - 12, S - 12], fill=(20, 20, 26, 255))
         d.ellipse([S - 82, S - 82, S - 20, S - 20], fill=(239, 68, 68, 255))
+    buf = io.BytesIO(); img.save(buf, format="PNG")
+    pixmap = QPixmap(); pixmap.loadFromData(buf.getvalue())
+    return QIcon(pixmap)
+
+
+def _make_tray_icon(paused=False):
+    """Icona del tray = logo dell'app (`assets/icon.png`, lo stesso del README).
+    In pausa viene desaturata e attenuata. Fallback al disegno se l'asset manca."""
+    try:
+        img = Image.open(paths.resource_path("assets/icon.png")).convert("RGBA")
+    except Exception:
+        return _drawn_tray_icon(paused)
+    if paused:
+        alpha = img.getchannel("A")
+        gray = ImageOps.grayscale(img.convert("RGB"))
+        gray = ImageEnhance.Brightness(gray).enhance(0.7)
+        img = gray.convert("RGBA")
+        img.putalpha(alpha)
     buf = io.BytesIO(); img.save(buf, format="PNG")
     pixmap = QPixmap(); pixmap.loadFromData(buf.getvalue())
     return QIcon(pixmap)
