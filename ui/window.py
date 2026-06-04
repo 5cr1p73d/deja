@@ -3743,11 +3743,37 @@ class DejaWindow(QWidget):
         self.stack.currentWidget().update(); self.stack.currentWidget().repaint()
         self.stack.update(); self.stack.repaint()
 
+    def _bring_to_front(self):
+        """Forza l'overlay in primo piano col focus. Windows blocca
+        SetForegroundWindow se il processo non è già in foreground (es. lanciato
+        da terminale): aggiriamo con AttachThreadInput."""
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            u = ctypes.windll.user32
+            k = ctypes.windll.kernel32
+            HWND_TOPMOST = -1
+            SWP_NOSIZE = 0x0001; SWP_NOMOVE = 0x0002
+            u.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE)
+            fg = u.GetForegroundWindow()
+            cur = k.GetCurrentThreadId()
+            ft = u.GetWindowThreadProcessId(fg, None) if fg else 0
+            if ft and ft != cur:
+                u.AttachThreadInput(ft, cur, True)
+            u.BringWindowToTop(hwnd)
+            u.SetForegroundWindow(hwnd)
+            if ft and ft != cur:
+                u.AttachThreadInput(ft, cur, False)
+        except Exception:
+            pass
+
     def toggle(self):
         if self.isVisible(): self.hide()
         else:
             if not applock.ensure_unlocked(self): return
-            self._center_on_screen(); self.show(); self.raise_(); self.activateWindow(); self.search_input.setFocus()
+            self._center_on_screen(); self.show(); self.raise_(); self.activateWindow()
+            self._bring_to_front()
+            self.search_input.setFocus()
 
     def hideEvent(self, e):
         super().hideEvent(e)
