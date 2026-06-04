@@ -37,6 +37,7 @@ _TR = {
     "it": {
         # ── Tray ──
         "tray.open": "Apri Deja",
+        "tray.settings": "⚙️ Impostazioni",
         "tray.audio_settings": "⚙️ Impostazioni audio",
         "tray.ai_settings": "🤖 Impostazioni AI",
         "tray.diary": "📖 Diario AI",
@@ -349,6 +350,7 @@ _TR = {
     },
     "en": {
         "tray.open": "Open Deja",
+        "tray.settings": "⚙️ Settings",
         "tray.audio_settings": "⚙️ Audio settings",
         "tray.ai_settings": "🤖 AI settings",
         "tray.diary": "📖 AI diary",
@@ -658,6 +660,7 @@ _TR = {
     },
     "es": {
         "tray.open": "Abrir Deja",
+        "tray.settings": "⚙️ Ajustes",
         "tray.audio_settings": "⚙️ Ajustes de audio",
         "tray.ai_settings": "🤖 Ajustes de IA",
         "tray.diary": "📖 Diario IA",

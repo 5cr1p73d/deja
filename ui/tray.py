@@ -86,8 +86,7 @@ class DejaTray(QSystemTrayIcon):
         a_open = menu.addAction(_lbl(t("tray.open")) + "   (Ctrl+Shift+D)"); a_open.triggered.connect(self._open_window)
         a_lock = menu.addAction(_lbl(t("tray.lock_now"))); a_lock.triggered.connect(self._lock_now)
         menu.addSeparator()
-        a_set  = menu.addAction(_lbl(t("tray.audio_settings"))); a_set.triggered.connect(self._open_settings)
-        a_ai   = menu.addAction(_lbl(t("tray.ai_settings"))); a_ai.triggered.connect(self._open_ai_settings)
+        a_set  = menu.addAction(_lbl(t("tray.settings"))); a_set.triggered.connect(self._open_settings)
         a_diary = menu.addAction(_lbl(t("tray.diary"))); a_diary.triggered.connect(self._open_diary)
         a_ask   = menu.addAction(_lbl(t("tray.ask_screen")))
         a_ask.triggered.connect(self._open_ask_screen)
@@ -203,10 +202,6 @@ class DejaTray(QSystemTrayIcon):
     def _open_settings(self):
         dlg = AppSettingsDialog(self._window)
         dlg.select_page("general"); dlg.exec()
-
-    def _open_ai_settings(self):
-        dlg = AppSettingsDialog(self._window)
-        dlg.select_page("ai"); dlg.exec()
 
     def _open_diary(self):
         from modules import applock
