@@ -270,13 +270,21 @@ def query(text: str, top_k: int = None) -> list[dict]:
     return ss_sorted + au_sorted
 
 
-def get_all() -> list[dict]:
-    """Ritorna tutti gli screenshot e audio ordinati per ts DESC."""
+def get_all(limit: int = 3000) -> list[dict]:
+    """Ritorna gli screenshot e audio più recenti (fino a `limit` totali),
+    ordinati per ts DESC.
+
+    NON carica i blob audio (`audio_data`): erano il collo di bottiglia di
+    "Esplora" (centinaia di MB letti in memoria per tutti i segmenti). Il blob
+    si recupera on-demand con `get_audio_blob(id)` quando si seleziona un item.
+    """
     conn = get_conn()
     c    = conn.cursor()
     results = []
 
-    for row in c.execute("SELECT id, ts, text, app FROM screenshots ORDER BY ts DESC"):
+    for row in c.execute(
+        "SELECT id, ts, text, app FROM screenshots ORDER BY ts DESC LIMIT ?", (limit,)
+    ):
         results.append({
             "id": row[0], "ts": row[1], "text": row[2],
             "app": row[3] or "Sconosciuta",
@@ -284,18 +292,32 @@ def get_all() -> list[dict]:
         })
 
     for row in c.execute(
-    "SELECT id, ts, source, transcript, audio_data, audio_format FROM audio_segments ORDER BY ts DESC"
+        "SELECT id, ts, source, transcript, audio_format FROM audio_segments "
+        "ORDER BY ts DESC LIMIT ?", (limit,)
     ):
         results.append({
             "id": row[0], "ts": row[1], "source": row[2],
-            "transcript": row[3], "audio_data": row[4],
-            "audio_format": row[5] or "f32",
+            "transcript": row[3], "audio_format": row[4] or "f32",
             "type": "audio", "score": 1.0, "exact": False,
             "app": "\U0001f399️ " + ("Microfono" if row[2] == "mic" else "Sistema"),
             "text": row[3]
         })
 
-
     conn.close()
     results.sort(key=lambda x: x["ts"], reverse=True)
-    return results
+    return results[:limit]
+
+
+def get_audio_blob(audio_id):
+    """Recupera (audio_data, audio_format) di un singolo segmento audio.
+    Usato per il caricamento on-demand alla selezione (Esplora/ricerca)."""
+    conn = get_conn()
+    try:
+        row = conn.cursor().execute(
+            "SELECT audio_data, audio_format FROM audio_segments WHERE id=?", (audio_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None, "f32"
+    return row[0], (row[1] or "f32")

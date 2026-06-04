@@ -4003,7 +4003,14 @@ class DejaWindow(QWidget):
             self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
             self.preview_lbl.setStyleSheet(f"background:transparent; color:{TEXT_PRIMARY}; font-size:14px; padding:16px; line-height: 1.6;")
 
-            audio_blob = r.get("audio_data"); audio_fmt = r.get("audio_format", "f32")
+            audio_fmt = r.get("audio_format", "f32")
+            audio_blob = r.get("audio_data")
+            # Esplora/ricerca non precaricano il blob: recuperalo on-demand.
+            if audio_blob is None and r.get("id") is not None:
+                try:
+                    audio_blob, audio_fmt = search_module.get_audio_blob(r["id"])
+                except Exception:
+                    audio_blob = None
             self._current_audio = (audio_blob, audio_fmt)
             if audio_blob:
                 decoded = decode_audio(audio_blob, audio_fmt)
@@ -4697,10 +4704,10 @@ class DejaWindow(QWidget):
                              (start_iso, end_iso)):
             results.append({"id": row[0], "ts": row[1], "app": row[2] or "?", "text": row[3],
                             "type": "screenshot", "score": 1.0, "exact": False})
-        for row in c.execute("SELECT id, ts, source, transcript, audio_data, audio_format FROM audio_segments WHERE ts>=? AND ts<=? ORDER BY ts DESC LIMIT 500",
+        for row in c.execute("SELECT id, ts, source, transcript, audio_format FROM audio_segments WHERE ts>=? AND ts<=? ORDER BY ts DESC LIMIT 500",
                              (start_iso, end_iso)):
             results.append({"id": row[0], "ts": row[1], "source": row[2], "transcript": row[3],
-                            "audio_data": row[4], "audio_format": row[5] or "f32",
+                            "audio_format": row[4] or "f32",
                             "type": "audio", "score": 1.0, "exact": False,
                             "app": "🎙️ " + (t("win.card_mic") if row[2] == "mic" else t("win.card_system")),
                             "text": row[3]})
