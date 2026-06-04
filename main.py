@@ -125,6 +125,17 @@ sys.excepthook = _handle_exception
 threading.excepthook = _thread_exception
 
 def main():
+    # Entry per l'host native messaging dell'estensione browser (build frozen:
+    # il browser lancia `deja.exe --web-host`). In dev si usa python sul file.
+    if "--web-host" in sys.argv:
+        import runpy
+        import paths
+        runpy.run_path(
+            paths.resource_path(os.path.join("extension", "host", "web_host.py")),
+            run_name="__main__",
+        )
+        return
+
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 

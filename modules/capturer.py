@@ -7,6 +7,7 @@ import pytesseract
 import pygetwindow as gw
 from db import get_conn, get_setting
 from modules import privacy
+from modules import web_bridge
 import config
 from config import OCR_LANG, TESSERACT_CMD
 # NB: CAPTURE_INTERVAL si legge come config.CAPTURE_INTERVAL (dinamico): un
@@ -104,6 +105,13 @@ def run(stop_event):
                 stop_event.wait(timeout=5); continue
             if privacy.is_workstation_locked():
                 stop_event.wait(timeout=5); continue
+            # Estensione browser: salta se la tab attiva è login o sito escluso.
+            # No-op se la feature è OFF o l'estensione non sta inviando stato.
+            try:
+                if web_bridge.should_skip():
+                    stop_event.wait(timeout=2); continue
+            except Exception:
+                pass
 
             with mss.mss() as sct:
                 monitor = _capture_target(sct)

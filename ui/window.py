@@ -685,6 +685,38 @@ class SettingsDialog(FramelessDialog):
             "border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:6px;}")
         tcl.addWidget(self._blocklist_edit)
 
+        # ── Estensione browser ──────────────────────────────────
+        from modules import web_bridge as _wb
+        tcl.addSpacing(8)
+        web_sec = QLabel(t("web.section").upper()); web_sec.setObjectName("section"); tcl.addWidget(web_sec)
+        self._web_enabled = _QCheckBox(t("web.enable"))
+        self._web_enabled.setChecked(_wb.enabled())
+        tcl.addWidget(self._web_enabled)
+        web_hint = QLabel(t("web.hint")); web_hint.setObjectName("caption"); web_hint.setWordWrap(True)
+        tcl.addWidget(web_hint)
+        self._web_ext_id = QLineEdit()
+        self._web_ext_id.setPlaceholderText(t("web.ext_id_hint"))
+        self._web_ext_id.setText(_get_setting("web_ext_id", "") or "")
+        self._field(tcl, t("web.ext_id_label"), self._web_ext_id, 190)
+        web_row = QHBoxLayout(); web_row.setSpacing(10)
+        web_install = QPushButton(t("web.install")); web_install.setObjectName("accent")
+        web_install.setCursor(Qt.CursorShape.PointingHandCursor)
+        web_install.clicked.connect(self._install_web_host)
+        self._web_status = QLabel(
+            t("web.status_connected") if _wb.is_connected() else t("web.status_disconnected"))
+        self._web_status.setObjectName("caption")
+        web_row.addWidget(web_install); web_row.addWidget(self._web_status, stretch=1)
+        tcl.addLayout(web_row)
+        wex_lbl = QLabel(t("web.excluded_label")); wex_lbl.setObjectName("field"); tcl.addWidget(wex_lbl)
+        self._web_excluded = QPlainTextEdit()
+        self._web_excluded.setPlaceholderText(t("web.excluded_hint"))
+        self._web_excluded.setPlainText(_get_setting("web_excluded_domains", "") or "")
+        self._web_excluded.setFixedHeight(70)
+        self._web_excluded.setStyleSheet(
+            "QPlainTextEdit{background:rgba(255,255,255,0.04); color:#e7e7ec; "
+            "border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:6px;}")
+        tcl.addWidget(self._web_excluded)
+
         tcl.addStretch(); built["privacy"] = t_priv
 
         # ── Tab AI ──────────────────────────────────────────────
@@ -1255,6 +1287,23 @@ class SettingsDialog(FramelessDialog):
         from ui.lock import setup_pin
         setup_pin(self)
 
+    def _install_web_host(self):
+        from modules import web_bridge as _wb
+        from ui.framed import alert as _alert
+        from db import save_setting
+        try:
+            save_setting("web_ext_id", self._web_ext_id.text().strip())
+        except Exception:
+            pass
+        try:
+            ok, msg = _wb.install_native_host()
+        except Exception as e:
+            ok, msg = False, str(e)
+        if ok:
+            _alert(self, t("web.section"), t("web.install_ok"))
+        else:
+            _alert(self, t("web.section"), t("web.install_fail", e=msg))
+
     def _region_text(self):
         from db import get_setting as _gs
         raw = _gs("capture_region", "") or ""
@@ -1353,6 +1402,15 @@ class SettingsDialog(FramelessDialog):
             save_setting("privacy_blocklist", self._blocklist_edit.toPlainText().strip())
         except Exception as e:
             print(f"[Settings] Errore privacy cattura: {e}")
+
+        # 2d. Estensione browser (abilita + domini esclusi) — lette live dal capturer
+        try:
+            from modules import web_bridge as _wb
+            _wb.set_enabled(self._web_enabled.isChecked())
+            _wb.set_excluded_domains(self._web_excluded.toPlainText().strip())
+            save_setting("web_ext_id", self._web_ext_id.text().strip())
+        except Exception as e:
+            print(f"[Settings] Errore estensione browser: {e}")
 
         # 3. Settings AI (text)
         try:
