@@ -270,20 +270,25 @@ def query(text: str, top_k: int = None) -> list[dict]:
     return ss_sorted + au_sorted
 
 
-def get_all(limit: int = 3000) -> list[dict]:
-    """Ritorna gli screenshot e audio più recenti (fino a `limit` totali),
-    ordinati per ts DESC.
+def get_all(limit: int = 3000, offset: int = 0) -> list[dict]:
+    """Ritorna una "pagina" di screenshot + audio ordinati per ts DESC.
 
-    NON carica i blob audio (`audio_data`): erano il collo di bottiglia di
-    "Esplora" (centinaia di MB letti in memoria per tutti i segmenti). Il blob
-    si recupera on-demand con `get_audio_blob(id)` quando si seleziona un item.
+    Paginabile con `offset` per lo scroll-infinito di "Esplora" (così si può
+    sfogliare TUTTO l'archivio, non solo i più recenti). NON carica i blob audio
+    (`audio_data`): erano il collo di bottiglia. Il blob si recupera on-demand
+    con `get_audio_blob(id)` alla selezione.
+
+    Ogni tabella ha indice su `ts DESC`: prendere i primi `limit+offset` da
+    ciascuna (top-N indicizzato) e fondere è veloce e dà l'ordine globale
+    corretto anche con offset.
     """
+    n = max(0, limit + offset)
     conn = get_conn()
     c    = conn.cursor()
     results = []
 
     for row in c.execute(
-        "SELECT id, ts, text, app FROM screenshots ORDER BY ts DESC LIMIT ?", (limit,)
+        "SELECT id, ts, text, app FROM screenshots ORDER BY ts DESC LIMIT ?", (n,)
     ):
         results.append({
             "id": row[0], "ts": row[1], "text": row[2],
@@ -293,7 +298,7 @@ def get_all(limit: int = 3000) -> list[dict]:
 
     for row in c.execute(
         "SELECT id, ts, source, transcript, audio_format FROM audio_segments "
-        "ORDER BY ts DESC LIMIT ?", (limit,)
+        "ORDER BY ts DESC LIMIT ?", (n,)
     ):
         results.append({
             "id": row[0], "ts": row[1], "source": row[2],
@@ -305,7 +310,7 @@ def get_all(limit: int = 3000) -> list[dict]:
 
     conn.close()
     results.sort(key=lambda x: x["ts"], reverse=True)
-    return results[:limit]
+    return results[offset:offset + limit]
 
 
 def get_audio_blob(audio_id):

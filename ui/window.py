@@ -1570,10 +1570,16 @@ class SearchWorker(QThread):
         try: self.done.emit(search_module.query(self.q))
         except Exception as e: self.error.emit(str(e))
 
+# Dimensione pagina di "Esplora" (scroll-infinito): si carica così, a blocchi.
+EXPLORE_PAGE = 3000
+
+
 class AllWorker(QThread):
     done = pyqtSignal(list)
+    def __init__(self, offset=0, limit=EXPLORE_PAGE):
+        super().__init__(); self._offset = offset; self._limit = limit
     def run(self):
-        try: self.done.emit(search_module.get_all())
+        try: self.done.emit(search_module.get_all(limit=self._limit, offset=self._offset))
         except Exception: self.done.emit([])
 
 class ModelsWorker(QThread):
@@ -3484,6 +3490,7 @@ class DejaWindow(QWidget):
 
         self.results_list = QListWidget()
         self.results_list.setSpacing(4)
+        self.results_list.verticalScrollBar().valueChanged.connect(self._on_results_scroll)
         self.results_list.setWordWrap(True); self.results_list.setUniformItemSizes(True)
         self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.results_list.setMouseTracking(True)
@@ -3845,6 +3852,9 @@ class DejaWindow(QWidget):
     def _show_all(self):
         self._all_mode = True; self._chat_mode = False; self._all_results = []; self._active_date = self._active_filter = "all"
         self._all_loading = True  # AllWorker in corso: i click sui filtri non devono mostrare "NESSUN ELEMENTO"
+        # Stato scroll-infinito: si parte dalla prima pagina, paginabile.
+        self._all_offset = 0; self._all_has_more = True
+        self._all_page_loading = False; self._all_paginable = True
         self._reset_chat_btn(); self.ai_card.reset()
         self._set_input(placeholder="Esplora la timeline...", ro=True, color=TEXT_SECONDARY)
         self.kbd.hide()
@@ -3873,12 +3883,47 @@ class DejaWindow(QWidget):
             return
         self._all_loading = False  # dati arrivati: i filtri possono valutare l'esito reale
         self._all_results = results
+        self._all_offset = len(results)
+        self._all_has_more = len(results) >= EXPLORE_PAGE
         # Riafferma l'altezza espansa: se l'animazione di _show_all è stata
         # interrotta o la finestra è tornata compatta, i risultati avrebbero
         # un'altezza insufficiente e si sovrapporrebbero alla barra di ricerca.
         if self.height() < OVERLAY_H_EXPANDED:
             self.setFixedHeight(OVERLAY_H_EXPANDED); self._animate_height(OVERLAY_H_EXPANDED)
         self._apply_date_filter(self._active_date)
+
+    def _on_results_scroll(self, value):
+        """Scroll-infinito: vicino al fondo, carica la pagina successiva."""
+        if not getattr(self, "_all_mode", False) or not getattr(self, "_all_paginable", False):
+            return
+        if self._active_date != "all" or getattr(self, "_all_page_loading", False):
+            return
+        if not getattr(self, "_all_has_more", False) or getattr(self, "_all_loading", False):
+            return
+        sb = self.results_list.verticalScrollBar()
+        if sb.maximum() > 0 and value >= sb.maximum() - 240:
+            self._load_more_all()
+
+    def _load_more_all(self):
+        self._all_page_loading = True
+        self._more_worker = AllWorker(offset=self._all_offset, limit=EXPLORE_PAGE)
+        self._more_worker.done.connect(self._on_more_all_done)
+        self._more_worker.start()
+
+    def _on_more_all_done(self, results):
+        self._all_page_loading = False
+        if not getattr(self, "_all_mode", False):
+            return
+        if not results:
+            self._all_has_more = False
+            return
+        self._all_results.extend(results)
+        self._all_offset += len(results)
+        self._all_has_more = len(results) >= EXPLORE_PAGE
+        sb = self.results_list.verticalScrollBar()
+        pos = sb.value()
+        self._apply_date_filter(self._active_date)
+        sb.setValue(min(pos, sb.maximum()))
 
     def _apply_date_filter(self, key):
         self._active_date = key; self._style_dpills()
@@ -4715,6 +4760,7 @@ class DejaWindow(QWidget):
         results.sort(key=lambda x: x["ts"], reverse=True)
         self._all_results = results; self._results = results
         self._all_mode = True
+        self._all_paginable = False  # query per data: no scroll-infinito
         self._apply_filter(); self._show_results_page()
         self.status.setText(f"📅 {len(results)} · {d_from.date().toString('dd MMM')} → {d_to.date().toString('dd MMM')}")
         self.status.show(); self.sep.show()
