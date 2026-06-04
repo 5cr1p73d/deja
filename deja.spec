@@ -31,6 +31,9 @@ hiddenimports += [
     "keyboard", "numpy", "PIL", "ctypes", "ctypes.util",
     # DB cifrato (SQLCipher) + segreti DPAPI
     "sqlcipher3", "sqlcipher3.dbapi2", "modules.secrets",
+    # App lock: Windows Hello (winrt) + moduli lock
+    "winrt", "winrt.windows.security.credentials.ui", "winrt.windows.foundation",
+    "modules.applock", "ui.lock",
     # moduli app caricati in modo lazy (PyInstaller potrebbe non vederli)
     "ui.onboarding", "paths", "applog", "autostart",
 ]

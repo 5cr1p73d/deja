@@ -29,6 +29,7 @@ from modules import ai_assistant
 import i18n
 from i18n import t
 from modules.secrets import protect_secret as _protect
+from modules import applock
 try:
     import config as _cfg
 except Exception:
@@ -662,6 +663,33 @@ class SettingsDialog(QDialog):
         til.addLayout(_stat_row(t("win.stat_database"), "deja.db"))
         til.addStretch(); tabs.addTab(t_info, t("win.tab_info"))
 
+        # ── Tab Sicurezza ───────────────────────────────────────
+        from PyQt6.QtWidgets import QCheckBox as _SecCB
+        t_sec = QWidget(); t_sec.setStyleSheet("background:transparent;")
+        tsl = QVBoxLayout(t_sec); tsl.setContentsMargins(24, 22, 24, 20); tsl.setSpacing(12)
+        sec_lbl = QLabel(t("sec.section")); sec_lbl.setObjectName("section"); tsl.addWidget(sec_lbl)
+        self._lock_enabled = _SecCB(t("sec.enable"))
+        self._lock_enabled.setChecked(applock.lock_enabled())
+        tsl.addWidget(self._lock_enabled)
+        sec_hint = QLabel(t("sec.hint")); sec_hint.setObjectName("caption"); sec_hint.setWordWrap(True)
+        tsl.addWidget(sec_hint)
+        method_txt = t("sec.method_hello") if applock.hello_available() else t("sec.method_pin")
+        sec_method = QLabel(method_txt); sec_method.setObjectName("caption"); sec_method.setWordWrap(True)
+        tsl.addWidget(sec_method)
+        rowp = QHBoxLayout(); rowp.setSpacing(12)
+        lblp = QLabel(t("sec.relock")); lblp.setObjectName("field"); lblp.setFixedWidth(160)
+        self._lock_relock = QComboBox()
+        for k, lab in [("every_access", t("sec.relock_every")), ("idle", t("sec.relock_idle")), ("manual", t("sec.relock_manual"))]:
+            self._lock_relock.addItem(lab, k)
+        ix = self._lock_relock.findData(applock.relock_policy())
+        self._lock_relock.setCurrentIndex(max(0, ix))
+        rowp.addWidget(lblp); rowp.addWidget(self._lock_relock, stretch=1); tsl.addLayout(rowp)
+        pin_btn = QPushButton(t("sec.set_pin")); pin_btn.setObjectName("accent")
+        pin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        pin_btn.clicked.connect(self._change_pin)
+        tsl.addWidget(pin_btn)
+        tsl.addStretch(); tabs.addTab(t_sec, t("sec.tab"))
+
         # ── Footer ──────────────────────────────────────────────
         foot_sep = QFrame(); foot_sep.setFrameShape(QFrame.Shape.HLine)
         foot_sep.setStyleSheet("background:rgba(255,255,255,0.07); max-height:1px; min-height:1px; border:none;")
@@ -847,6 +875,10 @@ class SettingsDialog(QDialog):
             self._vis_test_status.setText("✗ " + str(res))
         self._vis_detect_btn.setEnabled(True)
 
+    def _change_pin(self):
+        from ui.lock import setup_pin
+        setup_pin(self)
+
     def _save_and_close(self):
         from db import save_setting
 
@@ -884,6 +916,26 @@ class SettingsDialog(QDialog):
             _config_mod.AUDIO_MIN_SCORE = val
         except Exception as e:
             print(f"[Settings] Errore audio_min_score: {e}")
+
+        # 2b. Sicurezza / blocco app
+        try:
+            want = self._lock_enabled.isChecked()
+            if not want and applock.lock_enabled():
+                # Disattivare il blocco è pericoloso: avviso forte + conferma.
+                from PyQt6.QtWidgets import QMessageBox
+                box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
+                box.setWindowTitle(t("sec.warn_title")); box.setText(t("sec.warn_body"))
+                box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+                yes = box.addButton(t("sec.warn_disable"), QMessageBox.ButtonRole.DestructiveRole)
+                box.addButton(t("sec.warn_keep"), QMessageBox.ButtonRole.RejectRole)
+                box.exec()
+                if box.clickedButton() is not yes:
+                    want = True
+                    self._lock_enabled.setChecked(True)
+            applock.set_lock_enabled(want)
+            save_setting("lock_relock", self._lock_relock.currentData())
+        except Exception as e:
+            print(f"[Settings] Errore sicurezza: {e}")
 
         # 3. Settings AI (text)
         try:
@@ -2629,6 +2681,8 @@ class AskScreenDialog(QDialog):
 
 def open_ask_screen_dialog(parent=None, save_to_history=True):
     """Helper: cattura istantanea + apre dialog. Chiamato dall'hotkey."""
+    if not applock.ensure_unlocked(parent):
+        return None
     try:
         from modules import ask_screen
     except Exception as e:
@@ -2645,6 +2699,13 @@ def open_ask_screen_dialog(parent=None, save_to_history=True):
         except Exception as e:
             print(f"[AskScreen] save fail: {e}")
     dlg = AskScreenDialog(snap, parent=parent)
+    def _relock_ask():
+        try:
+            if applock.lock_enabled() and applock.relock_policy() == "every_access":
+                applock.lock_now()
+        except Exception:
+            pass
+    dlg.finished.connect(_relock_ask)
     dlg.show(); dlg.raise_(); dlg.activateWindow()
     return dlg
 
@@ -3187,7 +3248,18 @@ class DejaWindow(QWidget):
 
     def toggle(self):
         if self.isVisible(): self.hide()
-        else: self._center_on_screen(); self.show(); self.raise_(); self.activateWindow(); self.search_input.setFocus()
+        else:
+            if not applock.ensure_unlocked(self): return
+            self._center_on_screen(); self.show(); self.raise_(); self.activateWindow(); self.search_input.setFocus()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        # Re-lock alla chiusura dell'overlay (policy "ogni accesso").
+        try:
+            if applock.lock_enabled() and applock.relock_policy() == "every_access":
+                applock.lock_now()
+        except Exception:
+            pass
 
     def _on_text_changed(self, text):
         if self._all_mode or self.search_input.isReadOnly(): return

@@ -75,4 +75,8 @@ tqdm==4.67.3
 transformers==5.3.0
 typer==0.24.1
 typing-inspection==0.4.2
+# App lock: Windows Hello via WinRT (winsdk non ha wheel py3.14 → pacchetti winrt-*)
+winrt-runtime==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Security.Credentials.UI==3.2.1
 typing_extensions==4.15.0

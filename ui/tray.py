@@ -85,6 +85,7 @@ class DejaTray(QSystemTrayIcon):
         self.setToolTip(t("tray.tooltip_active"))
         menu = QMenu(); menu.setStyleSheet(MENU_QSS)
         a_open = menu.addAction(_lbl(t("tray.open")) + "   (Ctrl+Shift+D)"); a_open.triggered.connect(self._open_window)
+        a_lock = menu.addAction(_lbl(t("tray.lock_now"))); a_lock.triggered.connect(self._lock_now)
         menu.addSeparator()
         a_set  = menu.addAction(_lbl(t("tray.audio_settings"))); a_set.triggered.connect(self._open_settings)
         a_ai   = menu.addAction(_lbl(t("tray.ai_settings"))); a_ai.triggered.connect(self._open_ai_settings)
@@ -172,7 +173,22 @@ class DejaTray(QSystemTrayIcon):
         )
 
     def _open_window(self):
+        from modules import applock
+        if not applock.ensure_unlocked(self._window): return
         self._window.show(); self._window.raise_(); self._window.activateWindow()
+
+    def _lock_now(self):
+        from modules import applock
+        applock.lock_now()
+        try:
+            if self._window.isVisible():
+                self._window.hide()
+        except Exception:
+            pass
+        try:
+            self._window.toast(t("tray.locked"), level="ok", duration_ms=2000)
+        except Exception:
+            pass
 
     def _quit(self):
         self._stop_event.set(); self._app.quit()
@@ -184,7 +200,14 @@ class DejaTray(QSystemTrayIcon):
         dlg = AppSettingsDialog(self._window); dlg.exec()
 
     def _open_diary(self):
+        from modules import applock
+        if not applock.ensure_unlocked(self._window): return
         dlg = DiaryDialog(self._window); dlg.exec()
+        try:
+            if applock.lock_enabled() and applock.relock_policy() == "every_access":
+                applock.lock_now()
+        except Exception:
+            pass
 
     def _open_ask_screen(self):
         try:

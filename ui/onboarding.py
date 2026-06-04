@@ -161,6 +161,18 @@ class OnboardingDialog(QDialog):
             save_setting("privacy_redact", "1")
         if get_setting("privacy_idle_min") is None:
             save_setting("privacy_idle_min", "5")
+        # Blocco app attivo di default. Se Windows Hello non è disponibile,
+        # proponi subito un PIN così il blocco è applicabile.
+        if get_setting("lock_enabled") is None:
+            save_setting("lock_enabled", "1")
+        try:
+            from modules import applock
+            if (applock.lock_enabled() and not applock.hello_available()
+                    and not applock.has_pin()):
+                from ui.lock import setup_pin
+                setup_pin(self)
+        except Exception:
+            pass
         self._accepted = True
         self.accept()
 
