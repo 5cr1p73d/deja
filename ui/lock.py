@@ -6,8 +6,7 @@ Riusa lo stile scuro dell'onboarding. Modale, stays-on-top.
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QCursor, QGuiApplication
 from PyQt6.QtWidgets import (
-    QDialog, QFrame, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton,
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
 )
 
 import i18n
@@ -16,8 +15,7 @@ from modules import applock
 
 
 def _force_foreground(win) -> None:
-    """Porta la finestra in primo piano forzandolo (AttachThreadInput trick),
-    così il prompt di Windows Hello compare centrato e sopra a tutto."""
+    """Porta la finestra in primo piano forzandolo (AttachThreadInput trick)."""
     try:
         import ctypes
         hwnd = int(win.winId())
@@ -40,10 +38,73 @@ def _force_foreground(win) -> None:
         pass
 
 
+# Classe della finestra-prompt di Windows Hello/credenziali da ri-centrare.
+_HELLO_CLASSES = ("Credential Dialog Xaml Host",)
+
+
+def _center_hello_prompt() -> bool:
+    """Trova la finestra del prompt di Windows Hello e la sposta al centro
+    dello schermo sotto il cursore. Il prompt no-window nasce in alto a
+    sinistra: lo riposizioniamo noi. Ritorna True se spostata."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        buf = ctypes.create_unicode_buffer(256)
+        found = []
+
+        EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+        def _cb(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            user32.GetClassNameW(hwnd, buf, 256)
+            if buf.value in _HELLO_CLASSES:
+                found.append(hwnd)
+                return False
+            return True
+
+        user32.EnumWindows(EnumProc(_cb), 0)
+        if not found:
+            return False
+        hwnd = found[0]
+
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
+        if w <= 0 or h <= 0:
+            return False
+
+        pt = wintypes.POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD),
+            ]
+
+        hmon = user32.MonitorFromPoint(pt, 2)  # NEAREST
+        mi = MONITORINFO(); mi.cbSize = ctypes.sizeof(MONITORINFO)
+        user32.GetMonitorInfoW(hmon, ctypes.byref(mi))
+        mw = mi.rcMonitor.right - mi.rcMonitor.left
+        mh = mi.rcMonitor.bottom - mi.rcMonitor.top
+        x = mi.rcMonitor.left + (mw - w) // 2
+        y = mi.rcMonitor.top + (mh - h) // 2
+
+        HWND_TOP = 0
+        SWP_NOSIZE = 0x0001
+        SWP_SHOWWINDOW = 0x0040
+        user32.SetWindowPos(hwnd, HWND_TOP, x, y, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW)
+        return True
+    except Exception:
+        return False
+
+
 _QSS = """
-QDialog { background:transparent; }
-QWidget#backdrop { background:rgba(6,6,10,0.55); }
-QFrame#card { background:#0e0e12; border:1px solid rgba(255,255,255,0.10); border-radius:18px; }
+QDialog { background:#0e0e12; }
 QLabel { color:#f3f4f6; background:transparent; }
 QLabel#muted { color:#8b8d98; font-size:12px; }
 QLabel#h1 { font-size:20px; font-weight:600; }
@@ -64,34 +125,13 @@ class LockDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setModal(True)
-        self.setWindowFlags(
-            Qt.WindowType.Dialog
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setMinimumWidth(420)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setStyleSheet(_QSS)
         self._unlocked = False
         self._fails = 0
 
-        # Overlay translucido a tutto schermo con una card centrata: il prompt
-        # di Windows Hello compare al centro, in sovraimpressione su tutto.
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        backdrop = QWidget(); backdrop.setObjectName("backdrop")
-        outer.addWidget(backdrop)
-
-        center = QVBoxLayout(backdrop)
-        center.addStretch()
-        crow = QHBoxLayout()
-        crow.addStretch()
-        card = QFrame(); card.setObjectName("card"); card.setFixedWidth(440)
-        crow.addWidget(card)
-        crow.addStretch()
-        center.addLayout(crow)
-        center.addStretch()
-
-        root = QVBoxLayout(card)
+        root = QVBoxLayout(self)
         root.setContentsMargins(32, 28, 32, 24)
         root.setSpacing(12)
 
@@ -139,26 +179,68 @@ class LockDialog(QDialog):
         elif self._use_pin:
             QTimer.singleShot(0, self.pin.setFocus)
 
-    def _fit_to_cursor_screen(self):
+    def _center_on_cursor_screen(self):
         scr = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
         if scr:
-            self.setGeometry(scr.geometry())
+            g = scr.availableGeometry()
+            self.move(g.center() - self.rect().center())
 
     def showEvent(self, e):
         super().showEvent(e)
-        self._fit_to_cursor_screen()
+        self._center_on_cursor_screen()
         self.raise_(); self.activateWindow()
         _force_foreground(self)
 
     def _try_hello(self):
-        _force_foreground(self)
-        if applock.hello_verify(t("lock.hello_msg")):
+        # Hello gira in un thread: `asyncio.run` bloccherebbe il loop Qt e
+        # congelerebbe la UI. Intanto ri-centriamo il prompt (nasce in alto a
+        # sinistra) e facciamo polling per l'esito.
+        if getattr(self, "_hello_running", False) or not self._use_hello:
+            return
+        self._hello_running = True
+        self._hello_result = None
+        msg = t("lock.hello_msg")
+
+        import threading
+
+        def _run():
+            try:
+                ok = applock.hello_verify(msg)
+            except Exception:
+                ok = False
+            self._hello_result = ok
+            self._hello_running = False
+
+        threading.Thread(target=_run, daemon=True).start()
+
+        self._center_tries = 0
+        self._center_timer = QTimer(self)
+        self._center_timer.timeout.connect(self._tick_center)
+        self._center_timer.start(100)
+
+        self._done_timer = QTimer(self)
+        self._done_timer.timeout.connect(self._tick_hello_done)
+        self._done_timer.start(80)
+
+    def _tick_center(self):
+        self._center_tries += 1
+        # Smetti appena spostato o dopo ~6s (prompt mai apparso).
+        if _center_hello_prompt() or self._center_tries > 60:
+            self._center_timer.stop()
+
+    def _tick_hello_done(self):
+        if getattr(self, "_hello_running", False):
+            return
+        self._done_timer.stop()
+        ct = getattr(self, "_center_timer", None)
+        if ct is not None:
+            ct.stop()
+        if self._hello_result:
             self._unlocked = True
             self.accept()
-        else:
-            # Hello annullato/fallito: resta il PIN se disponibile.
-            if not self._use_pin:
-                self.err.setText(t("lock.hello_fail"))
+        elif not self._use_pin:
+            # Hello annullato/fallito e nessun PIN: mostra errore.
+            self.err.setText(t("lock.hello_fail"))
 
     def _try_pin(self):
         if self._fails_locked():
