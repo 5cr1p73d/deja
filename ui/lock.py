@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 import i18n
 from i18n import t
 from modules import applock
+from ui.framed import FramelessDialog
 
 _log = logging.getLogger("deja")
 
@@ -183,7 +184,7 @@ def _center_hello_prompt():
 
 
 _QSS = """
-QDialog { background:#0e0e12; }
+QDialog { background:transparent; }
 QLabel { color:#f3f4f6; background:transparent; }
 QLabel#muted { color:#8b8d98; font-size:12px; }
 QLabel#h1 { font-size:20px; font-weight:600; }
@@ -200,20 +201,20 @@ QPushButton#ghost:hover { color:#f3f4f6; }
 """
 
 
-class LockDialog(QDialog):
+class LockDialog(FramelessDialog):
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, stays_on_top=True, closable=False)
+        self.hide_titlebar()  # lock screen pulito: si esce con Esc
         self.setModal(True)
-        self.setMinimumWidth(420)
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setMinimumWidth(440)
         self.setWindowFlag(Qt.WindowType.Tool, True)  # niente bottone taskbar
         self.setStyleSheet(_QSS)
         self._unlocked = False
         self._fails = 0
         self._revealed = False
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(32, 28, 32, 24)
+        root = self.body
+        root.setContentsMargins(32, 14, 32, 24)
         root.setSpacing(12)
 
         title = QLabel("🔒 " + t("lock.title")); title.setObjectName("h1")
@@ -420,18 +421,17 @@ def require_unlock(parent=None) -> bool:
     return bool(getattr(dlg, "_unlocked", False))
 
 
-class PinSetupDialog(QDialog):
+class PinSetupDialog(FramelessDialog):
     """Imposta/cambia il PIN dell'app (min 4 cifre/char)."""
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, title="")
         self.setModal(True)
-        self.setMinimumWidth(420)
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setMinimumWidth(440)
         self.setStyleSheet(_QSS)
         self._ok = False
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(32, 28, 32, 24); root.setSpacing(12)
+        root = self.body
+        root.setContentsMargins(32, 4, 32, 24); root.setSpacing(12)
         title = QLabel("🔐 " + t("lock.set_pin_title")); title.setObjectName("h1")
         root.addWidget(title)
         sub = QLabel(t("lock.set_pin_sub")); sub.setObjectName("muted"); sub.setWordWrap(True)

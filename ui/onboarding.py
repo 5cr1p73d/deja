@@ -13,6 +13,7 @@ from db import get_setting, save_setting
 import config
 import i18n
 from i18n import t
+from ui.framed import FramelessDialog
 
 
 def needs_onboarding() -> bool:
@@ -20,7 +21,7 @@ def needs_onboarding() -> bool:
 
 
 _CARD_QSS = """
-QDialog { background:#0e0e12; }
+QDialog { background:transparent; }
 QLabel { color:#f3f4f6; background:transparent; }
 QLabel#muted { color:#8b8d98; }
 QLabel#h1 { font-size:22px; font-weight:600; }
@@ -39,19 +40,20 @@ QPushButton#ghost:hover { color:#f3f4f6; }
 """
 
 
-class OnboardingDialog(QDialog):
+class OnboardingDialog(FramelessDialog):
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, closable=False)
+        self.hide_titlebar()  # ha i suoi bottoni; trascinabile da aree vuote
         self.setModal(True)
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(580)
         self.setStyleSheet(_CARD_QSS)
         self._accepted = False
         self._tr: list[tuple[QWidget, str]] = []  # (widget, chiave) per retranslate
 
         self._ocr_ok = bool(config.TESSERACT_CMD)
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(34, 26, 34, 26)
+        root = self.body
+        root.setContentsMargins(34, 22, 34, 26)
         root.setSpacing(14)
 
         # ── Riga lingua ──

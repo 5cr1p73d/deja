@@ -5,8 +5,9 @@ from PIL import Image, ImageDraw, ImageFont
 from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QFileDialog
 from ui.window import SettingsDialog as AppSettingsDialog, DiaryDialog
+from ui.framed import confirm as _confirm, alert as _alert
 from db import backup_db, restore_db
 from modules import privacy
 import config
@@ -165,8 +166,8 @@ class DejaTray(QSystemTrayIcon):
 
     def _open_about(self):
         ocr = t("about.ocr_active") if config.TESSERACT_CMD else t("about.ocr_missing")
-        QMessageBox.about(
-            None,
+        _alert(
+            self._window,
             t("about.title"),
             t(
                 "about.body",
@@ -272,11 +273,10 @@ class DejaTray(QSystemTrayIcon):
             except Exception: print(f"[Audio] restart fail: {e}")
 
     def _restore(self):
-        ans = QMessageBox.warning(None, t("tray.restore_confirm_title"),
-            t("tray.restore_confirm_body"),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if ans != QMessageBox.StandardButton.Yes: return
+        if not _confirm(self._window, t("tray.restore_confirm_title"),
+                        t("tray.restore_confirm_body"),
+                        t("gen.confirm"), t("gen.cancel"), danger=True):
+            return
         path, _ = QFileDialog.getOpenFileName(None, t("tray.restore_title"), "", "Zip (*.zip)")
         if not path: return
         ok, msg = restore_db(path)

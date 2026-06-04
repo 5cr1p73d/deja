@@ -30,6 +30,7 @@ import i18n
 from i18n import t
 from modules.secrets import protect_secret as _protect
 from modules import applock
+from ui.framed import FramelessDialog, confirm as _confirm
 try:
     import config as _cfg
 except Exception:
@@ -319,7 +320,7 @@ def _md_to_html(text):
 # tipografia con gerarchia chiara. Classi via objectName: #section (titoletti),
 # #caption (note), #chip (bottoncini preset), #accent (azioni), #save_btn (primario).
 SETTINGS_QSS = """
-    QDialog { background:#17171c; }
+    QDialog { background:transparent; }
     QLabel  { color:#e7e7ec; background:transparent; font-size:12px; }
     QLabel#section {
         color:#9a9aa6; font-size:10px; font-weight:700; letter-spacing:1.6px;
@@ -358,6 +359,7 @@ SETTINGS_QSS = """
     QListWidget#nav {
         background:#131318; border:none; outline:none;
         border-right:1px solid rgba(255,255,255,0.06);
+        border-bottom-left-radius:15px;
         padding:12px 8px; font-size:12.5px;
     }
     QListWidget#nav::item {
@@ -415,22 +417,17 @@ SETTINGS_QSS = """
 """
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(FramelessDialog):
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(t("win.set_title"))
-        self.setMinimumSize(800, 620)
-        self.resize(840, 720)
-        # L'overlay di Déjà è WindowStaysOnTopHint|Tool: senza questo flag la finestra
-        # impostazioni resta DIETRO l'overlay, il modal blocca l'input e sembra tutto
-        # bloccato. Tenerla sopra (e portarla in primo piano in showEvent) risolve.
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        super().__init__(parent, title=t("win.set_title"))
+        self.setMinimumSize(840, 660)
+        self.resize(880, 760)
         self.setStyleSheet(SETTINGS_QSS)
         self._old_lang = i18n.get_language()
 
         from db import get_setting as _get_setting
 
-        root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
+        root = self.body; root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
         body = QHBoxLayout(); body.setContentsMargins(0, 0, 0, 0); body.setSpacing(0)
         root.addLayout(body, stretch=1)
 
@@ -875,16 +872,8 @@ class SettingsDialog(QDialog):
     def _prompt_restart(self):
         """Chiede conferma e, se accettata, riavvia l'app (shutdown pulito +
         rilancio in main.py via la proprietà 'restart_requested')."""
-        from PyQt6.QtWidgets import QMessageBox
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setWindowTitle(t("set.restart_title"))
-        box.setText(t("set.restart_body"))
-        box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        yes = box.addButton(t("set.restart_now"), QMessageBox.ButtonRole.AcceptRole)
-        box.addButton(t("set.restart_later"), QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-        if box.clickedButton() is yes:
+        if _confirm(self, t("set.restart_title"), t("set.restart_body"),
+                    t("set.restart_now"), t("set.restart_later")):
             app = QApplication.instance()
             if app is not None:
                 app.setProperty("restart_requested", True)
@@ -1132,14 +1121,8 @@ class SettingsDialog(QDialog):
             want = self._lock_enabled.isChecked()
             if not want and applock.lock_enabled():
                 # Disattivare il blocco è pericoloso: avviso forte + conferma.
-                from PyQt6.QtWidgets import QMessageBox
-                box = QMessageBox(self); box.setIcon(QMessageBox.Icon.Warning)
-                box.setWindowTitle(t("sec.warn_title")); box.setText(t("sec.warn_body"))
-                box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-                yes = box.addButton(t("sec.warn_disable"), QMessageBox.ButtonRole.DestructiveRole)
-                box.addButton(t("sec.warn_keep"), QMessageBox.ButtonRole.RejectRole)
-                box.exec()
-                if box.clickedButton() is not yes:
+                if not _confirm(self, t("sec.warn_title"), t("sec.warn_body"),
+                                t("sec.warn_disable"), t("sec.warn_keep"), danger=True):
                     want = True
                     self._lock_enabled.setChecked(True)
             applock.set_lock_enabled(want)
@@ -2324,16 +2307,13 @@ class ChatPage(QWidget):
 
 
 # ── Diary dialog (daily summaries AI) ─────────────────────────────
-class DiaryDialog(QDialog):
+class DiaryDialog(FramelessDialog):
     def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(t("win.diary_title"))
-        self.setMinimumSize(720, 560)
-        # Sopra l'overlay stays-on-top, altrimenti finisce dietro.
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-        self.setStyleSheet(f"QDialog{{background:{BG_HEX};}}")
+        super().__init__(parent, title=t("win.diary_title"))
+        self.setMinimumSize(740, 580)
+        self.setStyleSheet("QDialog{background:transparent;}")
 
-        root = QVBoxLayout(self); root.setContentsMargins(20, 18, 20, 16); root.setSpacing(12)
+        root = self.body; root.setContentsMargins(20, 6, 20, 16); root.setSpacing(12)
 
         head = QHBoxLayout(); head.setSpacing(8)
         title = QLabel(t("win.diary_header"))
@@ -2468,15 +2448,14 @@ class _DailySummaryWorker(QThread):
 
 
 # ── Context dialog (cross-reference ±N min) ───────────────────────
-class ContextDialog(QDialog):
+class ContextDialog(FramelessDialog):
     """Mostra ricordi ±N min attorno a un timestamp pivot."""
     def __init__(self, pivot_ts, pivot_label, parent=None, window_min=5):
-        super().__init__(parent)
-        self.setWindowTitle(t("win.ctx_title"))
-        self.setMinimumSize(520, 520)
-        self.setStyleSheet(f"QDialog{{background:{BG_HEX};}}")
+        super().__init__(parent, title=t("win.ctx_title"))
+        self.setMinimumSize(540, 540)
+        self.setStyleSheet("QDialog{background:transparent;}")
 
-        root = QVBoxLayout(self); root.setContentsMargins(20, 18, 20, 16); root.setSpacing(10)
+        root = self.body; root.setContentsMargins(20, 6, 20, 16); root.setSpacing(10)
 
         title = QLabel(t("win.ctx_header", min=window_min))
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.DemiBold))
@@ -2721,34 +2700,23 @@ class _AskScreenWorker(QThread):
         self.finished_streaming.emit()
 
 
-class AskScreenDialog(QDialog):
+class AskScreenDialog(FramelessDialog):
     """Popup 'Chiedi allo schermo ora'. Cattura istantanea + AI streaming.
 
     Si apre via hotkey Ctrl+Shift+A. Mostra thumbnail dello screen + input
     domanda + risposta AI in streaming markdown.
     """
     def __init__(self, snap, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, stays_on_top=True)
+        self.hide_titlebar()  # ha un suo header con titolo + ✕
         self._snap = snap
         self._worker = None
         self._answer_buf = []
         self._closing = False
 
-        self.setWindowTitle(t("win.ask_title"))
         self.setMinimumSize(720, 620)
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        # Container con bordo arrotondato
-        outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0)
-        card = QFrame()
-        card.setStyleSheet(
-            f"QFrame{{background:{BG_HEX}; border:1px solid {BORDER_STR}; "
-            f"border-radius:14px;}}"
-        )
-        outer.addWidget(card)
-
-        root = QVBoxLayout(card); root.setContentsMargins(20, 16, 20, 16); root.setSpacing(12)
+        root = self.body; root.setContentsMargins(20, 12, 20, 16); root.setSpacing(12)
 
         # Header
         head = QHBoxLayout(); head.setSpacing(8)
