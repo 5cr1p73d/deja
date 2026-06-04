@@ -472,6 +472,41 @@ class SettingsDialog(QDialog):
         cap_hint = QLabel(t("win.cap_hint"))
         cap_hint.setObjectName("caption"); cap_hint.setWordWrap(True); tcl.addWidget(cap_hint)
 
+        # ── Area schermo & Privacy ──────────────────────────────
+        from PyQt6.QtWidgets import QPlainTextEdit
+        tcl.addSpacing(6)
+        area_sec = QLabel(t("cap.area_section")); area_sec.setObjectName("section"); tcl.addWidget(area_sec)
+        reg_row = QHBoxLayout(); reg_row.setSpacing(10)
+        self._region_lbl = QLabel(self._region_text()); self._region_lbl.setObjectName("caption")
+        reg_btn = QPushButton(t("cap.choose_region")); reg_btn.setObjectName("accent")
+        reg_btn.setCursor(Qt.CursorShape.PointingHandCursor); reg_btn.clicked.connect(self._choose_region)
+        reg_reset = QPushButton(t("cap.reset_region"))
+        reg_reset.setCursor(Qt.CursorShape.PointingHandCursor); reg_reset.clicked.connect(self._reset_region)
+        reg_row.addWidget(self._region_lbl, stretch=1); reg_row.addWidget(reg_btn); reg_row.addWidget(reg_reset)
+        tcl.addLayout(reg_row)
+
+        self._redact_chk = _QCheckBox(t("cap.redact_label"))
+        self._redact_chk.setChecked((_get_setting("privacy_redact", "1") or "1") == "1")
+        tcl.addWidget(self._redact_chk)
+
+        idle_row = QHBoxLayout(); idle_row.setSpacing(12)
+        idle_lbl = QLabel(t("cap.idle_label")); idle_lbl.setObjectName("field"); idle_lbl.setFixedWidth(180)
+        self._idle_spin = QSpinBox(); self._idle_spin.setRange(0, 120); self._idle_spin.setSuffix(" min")
+        try: self._idle_spin.setValue(int(_get_setting("privacy_idle_min", "5") or 5))
+        except Exception: self._idle_spin.setValue(5)
+        idle_row.addWidget(idle_lbl); idle_row.addWidget(self._idle_spin); idle_row.addStretch()
+        tcl.addLayout(idle_row)
+
+        bl_lbl = QLabel(t("cap.blocklist_label")); bl_lbl.setObjectName("field"); tcl.addWidget(bl_lbl)
+        self._blocklist_edit = QPlainTextEdit()
+        self._blocklist_edit.setPlaceholderText(t("cap.blocklist_hint"))
+        self._blocklist_edit.setPlainText(_get_setting("privacy_blocklist", "") or "")
+        self._blocklist_edit.setFixedHeight(80)
+        self._blocklist_edit.setStyleSheet(
+            "QPlainTextEdit{background:rgba(255,255,255,0.04); color:#e7e7ec; "
+            "border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:6px;}")
+        tcl.addWidget(self._blocklist_edit)
+
         tcl.addStretch(); tabs.addTab(t_cap, t("win.tab_capture"))
 
         # ── Tab AI ──────────────────────────────────────────────
@@ -879,6 +914,35 @@ class SettingsDialog(QDialog):
         from ui.lock import setup_pin
         setup_pin(self)
 
+    def _region_text(self):
+        from db import get_setting as _gs
+        raw = _gs("capture_region", "") or ""
+        if raw and raw != "full":
+            try:
+                import json
+                r = json.loads(raw)
+                return t("cap.region_area", w=int(r["width"]), h=int(r["height"]))
+            except Exception:
+                pass
+        return t("cap.region_full")
+
+    def _choose_region(self):
+        from ui.region_select import select_region
+        from db import save_setting
+        # Nasconde le Impostazioni così l'overlay di selezione copre il desktro pulito.
+        self.hide()
+        r = select_region(None)
+        self.show(); self.raise_()
+        if r:
+            import json
+            save_setting("capture_region", json.dumps(r))
+            self._region_lbl.setText(self._region_text())
+
+    def _reset_region(self):
+        from db import save_setting
+        save_setting("capture_region", "full")
+        self._region_lbl.setText(self._region_text())
+
     def _save_and_close(self):
         from db import save_setting
 
@@ -936,6 +1000,14 @@ class SettingsDialog(QDialog):
             save_setting("lock_relock", self._lock_relock.currentData())
         except Exception as e:
             print(f"[Settings] Errore sicurezza: {e}")
+
+        # 2c. Privacy cattura (redazione PII, idle, blocklist) — lette live dal capturer
+        try:
+            save_setting("privacy_redact", "1" if self._redact_chk.isChecked() else "0")
+            save_setting("privacy_idle_min", str(self._idle_spin.value()))
+            save_setting("privacy_blocklist", self._blocklist_edit.toPlainText().strip())
+        except Exception as e:
+            print(f"[Settings] Errore privacy cattura: {e}")
 
         # 3. Settings AI (text)
         try:

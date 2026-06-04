@@ -135,6 +135,17 @@ _TR = {
         # ── Tray (blocco) ──
         "tray.lock_now": "🔒 Blocca ora",
         "tray.locked": "🔒 Déjà bloccato",
+        "tray.incognito": "🙈 Incognito (pausa tutto)",
+        # ── Cattura: area & privacy ──
+        "cap.area_section": "AREA SCHERMO & PRIVACY",
+        "cap.region_full": "Cattura: tutto lo schermo",
+        "cap.region_area": "Cattura: area {w}×{h}",
+        "cap.choose_region": "Scegli area schermo…",
+        "cap.reset_region": "Tutto lo schermo",
+        "cap.redact_label": "Oscura dati sensibili (PII) nel testo OCR",
+        "cap.idle_label": "Pausa dopo inattività",
+        "cap.blocklist_label": "App da non catturare (una per riga, * jolly)",
+        "cap.blocklist_hint": "es. *keepass*, *bank*, 1password*",
         # ── Window: pannello Impostazioni ──
         "win.set_title": "Impostazioni — Déjà",
         "win.sec_models": "MODELLI",
@@ -425,6 +436,17 @@ _TR = {
         # ── Tray (lock) ──
         "tray.lock_now": "🔒 Lock now",
         "tray.locked": "🔒 Déjà locked",
+        "tray.incognito": "🙈 Incognito (pause all)",
+        # ── Capture: area & privacy ──
+        "cap.area_section": "SCREEN AREA & PRIVACY",
+        "cap.region_full": "Capture: whole screen",
+        "cap.region_area": "Capture: {w}×{h} area",
+        "cap.choose_region": "Choose screen area…",
+        "cap.reset_region": "Whole screen",
+        "cap.redact_label": "Mask sensitive data (PII) in OCR text",
+        "cap.idle_label": "Pause after idle",
+        "cap.blocklist_label": "Apps to never capture (one per line, * wildcard)",
+        "cap.blocklist_hint": "e.g. *keepass*, *bank*, 1password*",
         # ── Window: Settings panel ──
         "win.set_title": "Settings — Déjà",
         "win.sec_models": "MODELS",
@@ -715,6 +737,17 @@ _TR = {
         # ── Tray (bloqueo) ──
         "tray.lock_now": "🔒 Bloquear ahora",
         "tray.locked": "🔒 Déjà bloqueado",
+        "tray.incognito": "🙈 Incógnito (pausar todo)",
+        # ── Captura: área y privacidad ──
+        "cap.area_section": "ÁREA DE PANTALLA Y PRIVACIDAD",
+        "cap.region_full": "Captura: toda la pantalla",
+        "cap.region_area": "Captura: área {w}×{h}",
+        "cap.choose_region": "Elegir área de pantalla…",
+        "cap.reset_region": "Toda la pantalla",
+        "cap.redact_label": "Ocultar datos sensibles (PII) en el texto OCR",
+        "cap.idle_label": "Pausa tras inactividad",
+        "cap.blocklist_label": "Apps que no capturar (una por línea, * comodín)",
+        "cap.blocklist_hint": "ej. *keepass*, *bank*, 1password*",
         # ── Window: panel de Ajustes ──
         "win.set_title": "Ajustes — Déjà",
         "win.sec_models": "MODELOS",

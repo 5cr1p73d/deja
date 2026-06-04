@@ -66,6 +66,21 @@ def _should_skip_app(app):
     patterns = privacy.parse_blocklist(raw or "")
     return privacy.is_app_blocked(app, patterns)
 
+def _capture_target(sct):
+    """Area da catturare: regione fissa salvata dall'utente (se valida) altrimenti
+    il monitor della finestra attiva. Letta a ogni ciclo (cambio immediato)."""
+    raw = get_setting("capture_region", "") or ""
+    if raw and raw != "full":
+        try:
+            import json
+            r = json.loads(raw)
+            if int(r["width"]) > 0 and int(r["height"]) > 0:
+                return {"left": int(r["left"]), "top": int(r["top"]),
+                        "width": int(r["width"]), "height": int(r["height"])}
+        except Exception:
+            pass
+    return _get_active_monitor(sct)
+
 _log = logging.getLogger("deja.capturer")
 
 def run(stop_event):
@@ -91,7 +106,7 @@ def run(stop_event):
                 stop_event.wait(timeout=5); continue
 
             with mss.mss() as sct:
-                monitor = _get_active_monitor(sct)
+                monitor = _capture_target(sct)
                 app = _get_active_app()
                 if _should_skip_app(app):
                     stop_event.wait(timeout=max(0, config.CAPTURE_INTERVAL - (time.time()-start)))

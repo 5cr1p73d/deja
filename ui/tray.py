@@ -104,6 +104,14 @@ class DejaTray(QSystemTrayIcon):
         priv_menu.addSeparator()
         a_unpause = priv_menu.addAction(_lbl(t("tray.resume")))
         a_unpause.triggered.connect(self._unpause)
+        priv_menu.addSeparator()
+        self._a_incognito = priv_menu.addAction(_lbl(t("tray.incognito")))
+        self._a_incognito.setCheckable(True)
+        try:
+            self._a_incognito.setChecked(privacy.is_paused())
+        except Exception:
+            pass
+        self._a_incognito.toggled.connect(self._toggle_incognito)
         menu.addSeparator()
         a_restart_audio = menu.addAction(_lbl(t("tray.restart_audio")))
         a_restart_audio.triggered.connect(self._restart_audio)
@@ -245,6 +253,18 @@ class DejaTray(QSystemTrayIcon):
         try: self._window.toast(t("tray.resumed"), level="ok", duration_ms=3000)
         except Exception: print("[Privacy] resumed")
         self.setToolTip(t("tray.tooltip_active"))
+
+    def _toggle_incognito(self, on):
+        # Incognito: pausa TUTTA la cattura finché non si ri-disattiva.
+        try:
+            if on:
+                privacy.pause_for(10 * 365 * 24 * 3600)
+                self.setToolTip(t("tray.tooltip_paused"))
+            else:
+                privacy.unpause()
+                self.setToolTip(t("tray.tooltip_active"))
+        except Exception as e:
+            print(f"[Privacy] incognito fail: {e}")
 
     def _restart_audio(self):
         try:
