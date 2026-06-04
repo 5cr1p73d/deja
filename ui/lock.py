@@ -3,6 +3,8 @@
 Schermata di sblocco di Déjà (Windows Hello + PIN) e dialog di setup PIN.
 Riusa lo stile scuro dell'onboarding. Modale, stays-on-top.
 """
+import logging
+
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QCursor, QGuiApplication
 from PyQt6.QtWidgets import (
@@ -12,6 +14,39 @@ from PyQt6.QtWidgets import (
 import i18n
 from i18n import t
 from modules import applock
+
+_log = logging.getLogger("deja")
+
+
+def _dump_new_windows(seen: set) -> None:
+    """Logga (una volta per coppia exe|classe) le finestre top-level estranee
+    visibili — per identificare la finestra-prompt di Windows Hello."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        own = ctypes.windll.kernel32.GetCurrentProcessId()
+        cls = ctypes.create_unicode_buffer(256)
+        EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+        def _cb(hwnd, _l):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if not pid.value or pid.value == own:
+                return True
+            exe = _proc_basename(pid.value)
+            user32.GetClassNameW(hwnd, cls, 256)
+            key = (exe, cls.value)
+            if key not in seen:
+                seen.add(key)
+                _log.info("Hello-scan finestra: exe=%s classe=%s", exe, cls.value)
+            return True
+
+        user32.EnumWindows(EnumProc(_cb), 0)
+    except Exception:
+        pass
 
 
 def _force_foreground(win) -> None:
@@ -38,37 +73,81 @@ def _force_foreground(win) -> None:
         pass
 
 
-# Classe della finestra-prompt di Windows Hello/credenziali da ri-centrare.
-_HELLO_CLASSES = ("Credential Dialog Xaml Host",)
+# Match per la finestra-prompt di Windows Hello/credenziali da ri-centrare.
+# Il nome del processo è il segnale più affidabile (la classe finestra cambia
+# tra versioni di Windows); la classe resta come fallback.
+_HELLO_EXES = ("credentialuibroker.exe", "consent.exe", "logonui.exe")
+_HELLO_CLASS_HINTS = ("credential", "hello")
 
 
-def _center_hello_prompt() -> bool:
-    """Trova la finestra del prompt di Windows Hello e la sposta al centro
-    dello schermo sotto il cursore. Il prompt no-window nasce in alto a
-    sinistra: lo riposizioniamo noi. Ritorna True se spostata."""
+def _proc_basename(pid) -> str:
     try:
         import ctypes
         from ctypes import wintypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(512)
+            size = wintypes.DWORD(512)
+            if not k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                return ""
+            return buf.value.rsplit("\\", 1)[-1].lower()
+        finally:
+            k32.CloseHandle(h)
+    except Exception:
+        return ""
 
+
+def _find_hello_window():
+    """Cerca la finestra del prompt Hello (per processo, poi per classe).
+    Esclude il nostro stesso processo. Ritorna l'HWND o None."""
+    try:
+        import ctypes
+        from ctypes import wintypes
         user32 = ctypes.windll.user32
-        buf = ctypes.create_unicode_buffer(256)
-        found = []
-
+        own_pid = ctypes.windll.kernel32.GetCurrentProcessId()
+        cls = ctypes.create_unicode_buffer(256)
+        hit = []
         EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
 
         def _cb(hwnd, _lparam):
             if not user32.IsWindowVisible(hwnd):
                 return True
-            user32.GetClassNameW(hwnd, buf, 256)
-            if buf.value in _HELLO_CLASSES:
-                found.append(hwnd)
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if not pid.value or pid.value == own_pid:
+                return True
+            exe = _proc_basename(pid.value)
+            if exe in _HELLO_EXES:
+                hit.append(hwnd)
+                return False
+            user32.GetClassNameW(hwnd, cls, 256)
+            name = cls.value.lower()
+            if any(h in name for h in _HELLO_CLASS_HINTS):
+                hit.append(hwnd)
                 return False
             return True
 
         user32.EnumWindows(EnumProc(_cb), 0)
-        if not found:
+        return hit[0] if hit else None
+    except Exception:
+        return None
+
+
+def _center_hello_prompt() -> bool:
+    """Sposta il prompt di Windows Hello al centro dello schermo sotto il
+    cursore (nasce in alto a sinistra). Ritorna True se spostata."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+
+        hwnd = _find_hello_window()
+        if not hwnd:
             return False
-        hwnd = found[0]
 
         rect = wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(rect))
@@ -214,6 +293,7 @@ class LockDialog(QDialog):
         threading.Thread(target=_run, daemon=True).start()
 
         self._center_tries = 0
+        self._win_seen = set()
         self._center_timer = QTimer(self)
         self._center_timer.timeout.connect(self._tick_center)
         self._center_timer.start(100)
@@ -224,8 +304,14 @@ class LockDialog(QDialog):
 
     def _tick_center(self):
         self._center_tries += 1
-        # Smetti appena spostato o dopo ~6s (prompt mai apparso).
-        if _center_hello_prompt() or self._center_tries > 60:
+        # Diagnostica: nei primi ~3s logga le finestre estranee viste, così se
+        # il prompt non viene centrato sappiamo exe/classe reali del broker.
+        if self._center_tries <= 30:
+            _dump_new_windows(self._win_seen)
+        # Ri-centra a ogni tick: il broker si ri-dispone dopo l'apertura.
+        # Smetti dopo ~10s come backstop (di norma lo ferma _tick_hello_done).
+        _center_hello_prompt()
+        if self._center_tries > 100:
             self._center_timer.stop()
 
     def _tick_hello_done(self):
