@@ -355,6 +355,17 @@ SETTINGS_QSS = """
         selection-background-color:rgba(167,139,250,0.22);
     }
 
+    QListWidget#nav {
+        background:#131318; border:none; outline:none;
+        border-right:1px solid rgba(255,255,255,0.06);
+        padding:12px 8px; font-size:12.5px;
+    }
+    QListWidget#nav::item {
+        color:#9a9aa6; padding:10px 12px; border-radius:8px; margin:2px 4px;
+    }
+    QListWidget#nav::item:hover { color:#d6d6dd; background:rgba(255,255,255,0.05); }
+    QListWidget#nav::item:selected { color:#f4f4f7; background:rgba(167,139,250,0.16); }
+
     QTabWidget::pane { border:none; background:transparent; }
     QTabBar { qproperty-drawBase:0; }
     QTabBar::tab {
@@ -408,14 +419,91 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(t("win.set_title"))
-        self.setFixedSize(660, 720)
+        self.setMinimumSize(800, 620)
+        self.resize(840, 720)
         # L'overlay di Déjà è WindowStaysOnTopHint|Tool: senza questo flag la finestra
         # impostazioni resta DIETRO l'overlay, il modal blocca l'input e sembra tutto
         # bloccato. Tenerla sopra (e portarla in primo piano in showEvent) risolve.
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setStyleSheet(SETTINGS_QSS)
+        self._old_lang = i18n.get_language()
+
+        from db import get_setting as _get_setting
+
         root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
-        tabs = QTabWidget(); root.addWidget(tabs, stretch=1)
+        body = QHBoxLayout(); body.setContentsMargins(0, 0, 0, 0); body.setSpacing(0)
+        root.addLayout(body, stretch=1)
+
+        self._nav = QListWidget(); self._nav.setObjectName("nav")
+        self._nav.setFixedWidth(188)
+        self._nav.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        body.addWidget(self._nav)
+        self._stack = QStackedWidget(); body.addWidget(self._stack, stretch=1)
+        self._page_index = {}
+        built = {}
+
+        _SCROLL_QSS = (
+            "QScrollArea{background:transparent; border:none;}"
+            "QScrollBar:vertical{background:transparent; width:8px; margin:2px;}"
+            "QScrollBar::handle:vertical{background:rgba(255,255,255,0.18); border-radius:4px; min-height:30px;}"
+            "QScrollBar::handle:vertical:hover{background:rgba(255,255,255,0.30);}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
+        )
+
+        def add_page(key, icon, label, w, scroll=False):
+            if scroll:
+                sc = QScrollArea(); sc.setWidgetResizable(True)
+                sc.setFrameShape(QFrame.Shape.NoFrame)
+                sc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                sc.setStyleSheet(_SCROLL_QSS); sc.setWidget(w); page = sc
+            else:
+                page = w
+            self._page_index[key] = self._stack.addWidget(page)
+            self._nav.addItem(QListWidgetItem(f"{icon}   {label}"))
+
+        def _field(parent_lay, label, widget, w=160):
+            row = QHBoxLayout(); row.setSpacing(12)
+            k = QLabel(label); k.setObjectName("field"); k.setFixedWidth(w)
+            row.addWidget(k); row.addWidget(widget, stretch=1)
+            parent_lay.addLayout(row)
+        self._field = _field
+
+        # Dispositivi audio (per la pagina Cattura), calcolati una volta.
+        try:
+            from ui.settings import _get_all_devices
+            _devs = _get_all_devices()
+        except Exception:
+            _devs = []
+        self._mics = [(idx, name) for tp, idx, name in _devs if tp == "mic"]
+        self._loopbacks = [(idx, name) for tp, idx, name in _devs if tp == "loopback"]
+
+        # ── Pagina Generale (lingua UI + OCR) ───────────────────
+        g_w = QWidget(); g_w.setStyleSheet("background:transparent;")
+        gl = QVBoxLayout(g_w); gl.setContentsMargins(26, 24, 26, 20); gl.setSpacing(14)
+        gen_sec = QLabel(t("set.nav_general").upper()); gen_sec.setObjectName("section"); gl.addWidget(gen_sec)
+        self._lang_combo = QComboBox()
+        for code, name in i18n.LANGUAGES.items():
+            self._lang_combo.addItem(f"{i18n.LANG_FLAGS.get(code,'')} {name}", code)
+        for i in range(self._lang_combo.count()):
+            if self._lang_combo.itemData(i) == i18n.get_language():
+                self._lang_combo.setCurrentIndex(i)
+        _field(gl, t("set.ui_language"), self._lang_combo)
+        self._ocr_combo = QComboBox()
+        try:
+            from ui.settings import OCR_PRESETS as _OCRP
+        except Exception:
+            _OCRP = ["ita+eng", "eng", "ita"]
+        cur_ocr = _get_setting("ocr_lang") or "ita+eng"
+        presets = list(_OCRP)
+        if cur_ocr not in presets:
+            presets.insert(0, cur_ocr)
+        for p in presets:
+            self._ocr_combo.addItem(p, p)
+        self._ocr_combo.setCurrentIndex(max(0, presets.index(cur_ocr)))
+        _field(gl, t("set.ocr_language"), self._ocr_combo)
+        gnote = QLabel(t("set.restart_note")); gnote.setObjectName("caption"); gnote.setWordWrap(True)
+        gl.addWidget(gnote); gl.addStretch()
+        built["general"] = g_w
 
         # ── Tab Ricerca ─────────────────────────────────────────
         t_search = QWidget(); t_search.setStyleSheet("background:transparent;")
@@ -441,7 +529,7 @@ class SettingsDialog(QDialog):
         except Exception: self._score_spin.setValue(25)
         row2.addWidget(lbl2); row2.addWidget(self._score_spin); row2.addStretch()
         tsl.addLayout(row2); tsl.addStretch()
-        tabs.addTab(t_search, t("win.tab_search"))
+        built["models"] = t_search
 
         # ── Tab Cattura ─────────────────────────────────────────
         t_cap = QWidget(); t_cap.setStyleSheet("background:transparent;")
@@ -472,9 +560,35 @@ class SettingsDialog(QDialog):
         cap_hint = QLabel(t("win.cap_hint"))
         cap_hint.setObjectName("caption"); cap_hint.setWordWrap(True); tcl.addWidget(cap_hint)
 
-        # ── Area schermo & Privacy ──────────────────────────────
-        from PyQt6.QtWidgets import QPlainTextEdit
+        # ── Audio (dispositivi) ─────────────────────────────────
         tcl.addSpacing(6)
+        aud_sec = QLabel(t("set.audio").upper()); aud_sec.setObjectName("section"); tcl.addWidget(aud_sec)
+        self._mic_combo = QComboBox(); self._mic_combo.addItem(t("set.dont_record"), None)
+        for _i, _n in self._mics:
+            self._mic_combo.addItem(_n, _i)
+        _smic = _get_setting("audio_mic_index")
+        if _smic:
+            for _i in range(self._mic_combo.count()):
+                if str(self._mic_combo.itemData(_i)) == _smic:
+                    self._mic_combo.setCurrentIndex(_i)
+        self._field(tcl, t("set.mic"), self._mic_combo, 180)
+        self._out_combo = QComboBox(); self._out_combo.addItem(t("set.dont_record"), None)
+        for _i, _n in self._loopbacks:
+            self._out_combo.addItem(_n, _i)
+        _sout = _get_setting("audio_out_index")
+        if _sout:
+            for _i in range(self._out_combo.count()):
+                if str(self._out_combo.itemData(_i)) == _sout:
+                    self._out_combo.setCurrentIndex(_i)
+        self._field(tcl, t("set.system_audio"), self._out_combo, 180)
+
+        tcl.addStretch()
+        built["capture"] = t_cap
+
+        # ── Pagina Area & Privacy ───────────────────────────────
+        from PyQt6.QtWidgets import QPlainTextEdit
+        t_priv = QWidget(); t_priv.setStyleSheet("background:transparent;")
+        tcl = QVBoxLayout(t_priv); tcl.setContentsMargins(26, 24, 26, 20); tcl.setSpacing(14)
         area_sec = QLabel(t("cap.area_section")); area_sec.setObjectName("section"); tcl.addWidget(area_sec)
         reg_row = QHBoxLayout(); reg_row.setSpacing(10)
         self._region_lbl = QLabel(self._region_text()); self._region_lbl.setObjectName("caption")
@@ -507,7 +621,7 @@ class SettingsDialog(QDialog):
             "border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:6px;}")
         tcl.addWidget(self._blocklist_edit)
 
-        tcl.addStretch(); tabs.addTab(t_cap, t("win.tab_capture"))
+        tcl.addStretch(); built["privacy"] = t_priv
 
         # ── Tab AI ──────────────────────────────────────────────
         t_ai = QWidget(); t_ai.setStyleSheet("background:transparent;")
@@ -583,12 +697,12 @@ class SettingsDialog(QDialog):
         self._ai_test_status.setWordWrap(True)
         test_row.addWidget(self._ai_test_status, stretch=1)
         tail.addLayout(test_row)
+        tail.addStretch()
+        built["ai"] = t_ai
 
-        # ── Sub-section: Vision (Ask Screen) ────────────────────
-        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("background:rgba(255,255,255,0.07); max-height:1px; min-height:1px; border:none;")
-        tail.addSpacing(4); tail.addWidget(sep); tail.addSpacing(4)
-
+        # ── Pagina Vision (Ask Screen) ──────────────────────────
+        t_vis = QWidget(); t_vis.setStyleSheet("background:transparent;")
+        tail = QVBoxLayout(t_vis); tail.setContentsMargins(26, 24, 26, 20); tail.setSpacing(14)
         vis_title = QLabel(t("win.sec_vision")); vis_title.setObjectName("section")
         tail.addWidget(vis_title)
 
@@ -662,19 +776,7 @@ class SettingsDialog(QDialog):
         tail.addLayout(vtest_row)
 
         tail.addStretch()
-        # Il tab AI ha molti campi (chat + vision): scroll area così nulla viene tagliato.
-        ai_scroll = QScrollArea(); ai_scroll.setWidgetResizable(True)
-        ai_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        ai_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        ai_scroll.setStyleSheet(
-            "QScrollArea{background:transparent; border:none;}"
-            "QScrollBar:vertical{background:transparent; width:8px; margin:2px;}"
-            "QScrollBar::handle:vertical{background:rgba(255,255,255,0.18); border-radius:4px; min-height:30px;}"
-            "QScrollBar::handle:vertical:hover{background:rgba(255,255,255,0.30);}"
-            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"
-        )
-        ai_scroll.setWidget(t_ai)
-        tabs.addTab(ai_scroll, t("win.tab_ai"))
+        built["vision"] = t_vis
 
         # ── Tab Info ────────────────────────────────────────────
         t_info = QWidget(); t_info.setStyleSheet("background:transparent;")
@@ -696,7 +798,7 @@ class SettingsDialog(QDialog):
         til.addLayout(_stat_row(t("win.stat_screens_saved"), n_ss))
         til.addLayout(_stat_row(t("win.stat_audio_segments"), n_au))
         til.addLayout(_stat_row(t("win.stat_database"), "deja.db"))
-        til.addStretch(); tabs.addTab(t_info, t("win.tab_info"))
+        til.addStretch(); built["info"] = t_info
 
         # ── Tab Sicurezza ───────────────────────────────────────
         from PyQt6.QtWidgets import QCheckBox as _SecCB
@@ -723,7 +825,27 @@ class SettingsDialog(QDialog):
         pin_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         pin_btn.clicked.connect(self._change_pin)
         tsl.addWidget(pin_btn)
-        tsl.addStretch(); tabs.addTab(t_sec, t("sec.tab"))
+        tsl.addStretch(); built["security"] = t_sec
+
+        # ── Costruisci la sidebar nell'ordine desiderato ────────
+        _order = [
+            ("general",  "⚙",  t("set.nav_general")),
+            ("capture",  "🎥", t("set.nav_capture")),
+            ("privacy",  "🛡",  t("set.nav_privacy")),
+            ("ai",       "🤖", t("set.nav_ai")),
+            ("vision",   "👁",  t("set.nav_vision")),
+            ("security", "🔒", t("set.nav_security")),
+            ("models",   "🧠", t("set.nav_models")),
+            ("info",     "ℹ",  t("set.nav_info")),
+        ]
+        _scrollable = {"capture", "privacy", "ai", "vision"}
+        for _key, _icon, _label in _order:
+            _w = built.get(_key)
+            if _w is None:
+                continue
+            add_page(_key, _icon, _label, _w, scroll=_key in _scrollable)
+        self._nav.setCurrentRow(0)
+        self._nav.currentRowChanged.connect(self._stack.setCurrentIndex)
 
         # ── Footer ──────────────────────────────────────────────
         foot_sep = QFrame(); foot_sep.setFrameShape(QFrame.Shape.HLine)
@@ -743,6 +865,30 @@ class SettingsDialog(QDialog):
         super().showEvent(e)
         # Porta la finestra davanti all'overlay (anch'esso stays-on-top).
         self.raise_(); self.activateWindow()
+
+    def select_page(self, key):
+        """Preseleziona una pagina della sidebar (es. 'ai', 'capture')."""
+        idx = getattr(self, "_page_index", {}).get(key)
+        if idx is not None:
+            self._nav.setCurrentRow(idx)
+
+    def _prompt_restart(self):
+        """Chiede conferma e, se accettata, riavvia l'app (shutdown pulito +
+        rilancio in main.py via la proprietà 'restart_requested')."""
+        from PyQt6.QtWidgets import QMessageBox
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(t("set.restart_title"))
+        box.setText(t("set.restart_body"))
+        box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        yes = box.addButton(t("set.restart_now"), QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(t("set.restart_later"), QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is yes:
+            app = QApplication.instance()
+            if app is not None:
+                app.setProperty("restart_requested", True)
+                app.quit()
 
     def _maybe_autodetect_models(self):
         """Se l'endpoint è configurato (key o locale), interroga i modelli disponibili
@@ -1040,7 +1186,37 @@ class SettingsDialog(QDialog):
         except Exception as e:
             print(f"[Settings] Errore salvataggio toggle cattura: {e}")
 
+        # 6. Generale: dispositivi audio + OCR + lingua UI
+        try:
+            from db import get_conn as _gc
+            conn = _gc(); c = conn.cursor()
+            mic_idx = self._mic_combo.currentData(); out_idx = self._out_combo.currentData()
+            if mic_idx is not None:
+                c.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", ("audio_mic_index", str(mic_idx)))
+            else:
+                c.execute("DELETE FROM settings WHERE key='audio_mic_index'")
+            if out_idx is not None:
+                c.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", ("audio_out_index", str(out_idx)))
+            else:
+                c.execute("DELETE FROM settings WHERE key='audio_out_index'")
+            c.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", ("ocr_lang", self._ocr_combo.currentData()))
+            conn.commit(); conn.close()
+            i18n.set_language(self._lang_combo.currentData())
+            try:
+                from modules.audio import request_restart as _rr
+                _rr()
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[Settings] Errore salvataggio Generale: {e}")
+
         self.accept()
+        # Il cambio lingua richiede un riavvio per ridisegnare tutta la UI.
+        try:
+            if self._lang_combo.currentData() != self._old_lang:
+                self._prompt_restart()
+        except Exception:
+            pass
 
 
 # ── Card Delegate (Sleek Modern Items) ─────────────────────────────
