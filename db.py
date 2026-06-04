@@ -195,6 +195,23 @@ def init_db():
             vector           BLOB NOT NULL,
             FOREIGN KEY (audio_segment_id) REFERENCES audio_segments(id)
         );
+        CREATE TABLE IF NOT EXISTS web_pages (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts      TEXT NOT NULL,
+            url     TEXT NOT NULL,
+            domain  TEXT,
+            title   TEXT,
+            text    TEXT,
+            links   TEXT,
+            pinned  INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS web_embeddings (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            web_id      INTEGER NOT NULL,
+            dim         INTEGER NOT NULL,
+            vector      BLOB NOT NULL,
+            FOREIGN KEY (web_id) REFERENCES web_pages(id)
+        );
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT
@@ -209,6 +226,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_chat_conv         ON chat_messages(conversation_id, id);
         CREATE INDEX IF NOT EXISTS idx_screenshots_ts    ON screenshots(ts DESC);
         CREATE INDEX IF NOT EXISTS idx_audio_ts          ON audio_segments(ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_web_ts            ON web_pages(ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_web_emb_wid       ON web_embeddings(web_id);
         CREATE INDEX IF NOT EXISTS idx_ss_emb_sid        ON screenshot_embeddings(screenshot_id);
         CREATE INDEX IF NOT EXISTS idx_au_emb_aid        ON audio_embeddings(audio_segment_id);
         CREATE TABLE IF NOT EXISTS daily_summaries (
@@ -261,6 +280,10 @@ def init_db():
             )
             c.execute(
                 f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_audio "
+                f"USING vec0(emb int8[{EMBED_DIM}] distance_metric=cosine)"
+            )
+            c.execute(
+                f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_web "
                 f"USING vec0(emb int8[{EMBED_DIM}] distance_metric=cosine)"
             )
             print("[DB] sqlite-vec virtual tables OK (int8 cosine).")

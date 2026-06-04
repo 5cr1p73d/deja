@@ -85,6 +85,21 @@ def _exact_search_audio(conn, text: str) -> list[int]:
     c.execute(f"SELECT id FROM audio_segments WHERE {where}", params)
     return [r[0] for r in c.fetchall()]
 
+def _exact_search_web(conn, text: str) -> list[int]:
+    c = conn.cursor()
+    tokens = _tokenize_query(text)
+    if not tokens:
+        like = f"%{text}%"
+        c.execute("SELECT id FROM web_pages WHERE text LIKE ? OR title LIKE ? OR url LIKE ?",
+                  (like, like, like))
+        return [r[0] for r in c.fetchall()]
+    where = " AND ".join("(LOWER(text) LIKE ? OR LOWER(title) LIKE ?)" for _ in tokens)
+    params = []
+    for t in tokens:
+        params += [f"%{t}%", f"%{t}%"]
+    c.execute(f"SELECT id FROM web_pages WHERE {where}", tuple(params))
+    return [r[0] for r in c.fetchall()]
+
 def _vec_search(conn, table, q_int8_bytes, k):
     """Usa sqlite-vec per top-k cosine. Ritorna list[(id, similarity)]."""
     try:
@@ -260,14 +275,53 @@ def query(text: str, top_k: int = None) -> list[dict]:
                         "text": row[2]
                     }
 
+    # ── 5. Pagine web (estensione browser) ────────────────────────
+    web = {}
+
+    def _web_row(wid):
+        return c.execute(
+            "SELECT ts, url, domain, title, text FROM web_pages WHERE id=?", (wid,)
+        ).fetchone()
+
+    def _web_dict(wid, row, score, exact):
+        return {
+            "id": wid, "score": score, "ts": row[0], "url": row[1],
+            "domain": row[2] or "", "title": row[3] or "", "text": row[4] or "",
+            "type": "web", "exact": exact, "app": "🌐 " + (row[2] or "web"),
+        }
+
+    for wid in _exact_search_web(conn, text):
+        row = _web_row(wid)
+        if row:
+            web[f"web_{wid}"] = _web_dict(wid, row, 1.0, True)
+
+    sem_cap_web = max(k * 3, 30)
+    web_hits = None
+    if use_vec:
+        try:
+            q_i8 = quantize_int8(q_emb).tobytes()
+            web_hits = _vec_search(conn, "vec_web", q_i8, sem_cap_web)
+        except Exception:
+            web_hits = None
+    if web_hits is not None:
+        for wid, score in web_hits:
+            if len(web) >= sem_cap_web: break
+            if score < MIN_SCORE_SCREENSHOT: continue
+            key = f"web_{wid}"
+            if key in web: continue
+            row = _web_row(wid)
+            if row:
+                web[key] = _web_dict(wid, row, score, False)
+
     conn.close()
 
     # Sort: exact first, score desc, ts desc (recent first)
     def _sort_key(x):
         return (not x.get("exact", False), -x["score"], -_ts_int(x["ts"]))
-    ss_sorted = sorted(screenshots.values(), key=_sort_key)[:k]
-    au_sorted = sorted(audio.values(),       key=_sort_key)[:k]
-    return ss_sorted + au_sorted
+    ss_sorted  = sorted(screenshots.values(), key=_sort_key)[:k]
+    au_sorted  = sorted(audio.values(),       key=_sort_key)[:k]
+    web_sorted = sorted(web.values(),         key=_sort_key)[:k]
+    return ss_sorted + au_sorted + web_sorted
 
 
 def get_all(limit: int = 3000, offset: int = 0) -> list[dict]:
@@ -306,6 +360,17 @@ def get_all(limit: int = 3000, offset: int = 0) -> list[dict]:
             "type": "audio", "score": 1.0, "exact": False,
             "app": "\U0001f399️ " + ("Microfono" if row[2] == "mic" else "Sistema"),
             "text": row[3]
+        })
+
+    for row in c.execute(
+        "SELECT id, ts, url, domain, title, text FROM web_pages "
+        "ORDER BY ts DESC LIMIT ?", (n,)
+    ):
+        results.append({
+            "id": row[0], "ts": row[1], "url": row[2], "domain": row[3] or "",
+            "title": row[4] or "", "text": row[5] or "",
+            "type": "web", "score": 1.0, "exact": False,
+            "app": "🌐 " + (row[3] or "web"),
         })
 
     conn.close()

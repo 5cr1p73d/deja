@@ -81,6 +81,31 @@ def _save_audio_embedding(conn, aid, vec):
         print(f"[Indexer] vec_au insert fail #{aid}: {e}")
     conn.commit()
 
+def _fetch_unindexed_web(conn, limit):
+    c = conn.cursor()
+    c.execute("""
+        SELECT w.id, w.title, w.text FROM web_pages w
+        LEFT JOIN web_embeddings e ON e.web_id = w.id
+        WHERE (w.text IS NOT NULL AND w.text != '') AND e.id IS NULL
+        ORDER BY w.id ASC LIMIT ?
+    """, (limit,))
+    return c.fetchall()
+
+def _save_web_embedding(conn, wid, vec):
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO web_embeddings (web_id, dim, vector) VALUES (?, ?, ?)",
+        (wid, vec.shape[0], vec.astype("float32").tobytes()))
+    try:
+        from db import vec_available, quantize_int8
+        if vec_available():
+            i8 = quantize_int8(vec)
+            c.execute("INSERT INTO vec_web(rowid, emb) VALUES (?, vec_int8(?))",
+                      (wid, i8.tobytes()))
+    except Exception as e:
+        print(f"[Indexer] vec_web insert fail #{wid}: {e}")
+    conn.commit()
+
 def run(stop_event):
     if not _load_model():
         print("[Indexer] Modello non disponibile: indicizzazione disattivata (la ricerca userà il fallback).")
@@ -100,6 +125,13 @@ def run(stop_event):
                 vecs = model.encode([r[1] for r in audio_rows], convert_to_numpy=True, normalize_embeddings=True)
                 for (aid, _), vec in zip(audio_rows, vecs): _save_audio_embedding(conn, aid, vec)
                 print(f"[Indexer] Audio: indicizzati {len(audio_rows)} embedding.")
+            web_rows = _fetch_unindexed_web(conn, INDEXER_BATCH)
+            if web_rows:
+                # Embedda titolo + testo (testo già limitato in fase di ingest).
+                texts = [((r[1] or "") + "\n" + (r[2] or "")).strip() for r in web_rows]
+                vecs = model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+                for (wid, _, _), vec in zip(web_rows, vecs): _save_web_embedding(conn, wid, vec)
+                print(f"[Indexer] Web: indicizzate {len(web_rows)} pagine.")
         except Exception as e:
             # Un errore in un ciclo non deve uccidere il thread per sempre.
             log.exception("Errore nel ciclo indexer")
