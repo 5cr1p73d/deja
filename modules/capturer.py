@@ -109,6 +109,7 @@ def run(stop_event):
             # No-op se la feature è OFF o l'estensione non sta inviando stato.
             try:
                 if web_bridge.should_skip():
+                    print("[Capturer] Skip: tab browser login/esclusa (estensione)")
                     stop_event.wait(timeout=2); continue
             except Exception:
                 pass

@@ -44,11 +44,30 @@ def set_enabled(on: bool) -> None:
     save_setting("web_bridge_enabled", "1" if on else "0")
 
 
+def _norm_domain(s: str) -> str:
+    """Normalizza un input in dominio: accetta anche URL completi o con www.
+    'https://archive.org/signup' → 'archive.org', 'www.Bank.com' → 'bank.com'."""
+    s = (s or "").strip().lower()
+    if not s:
+        return ""
+    if "://" in s or "/" in s:
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(s if "://" in s else "http://" + s).hostname or ""
+            s = host
+        except Exception:
+            s = s.split("/", 1)[0]
+    s = s.lstrip(".")
+    if s.startswith("www."):
+        s = s[4:]
+    return s
+
+
 def excluded_domains() -> list:
     raw = get_setting("web_excluded_domains", "") or ""
     out = []
     for line in raw.replace(",", "\n").splitlines():
-        d = line.strip().lower().lstrip(".")
+        d = _norm_domain(line)
         if d:
             out.append(d)
     return out
@@ -116,9 +135,9 @@ def is_browser_foreground() -> bool:
 
 # ── Decisione ──────────────────────────────────────────────────────
 def _domain_excluded(domain: str) -> bool:
+    domain = _norm_domain(domain)
     if not domain:
         return False
-    domain = domain.lower().lstrip(".")
     for d in excluded_domains():
         if domain == d or domain.endswith("." + d):
             return True

@@ -7,10 +7,21 @@ async function load() {
   $("excluded").value = (c.excludedDomains || []).join("\n");
 }
 
+function normDomain(s) {
+  s = (s || "").trim().toLowerCase();
+  if (!s) return "";
+  if (s.includes("://") || s.includes("/")) {
+    try { s = new URL(s.includes("://") ? s : "http://" + s).hostname; } catch (e) { s = s.split("/")[0]; }
+  }
+  s = s.replace(/^\.+/, "");
+  if (s.startsWith("www.")) s = s.slice(4);
+  return s;
+}
+
 async function save() {
   const domains = $("excluded").value
     .split("\n")
-    .map(s => s.trim().toLowerCase().replace(/^\.+/, ""))
+    .map(normDomain)
     .filter(Boolean);
   await chrome.storage.local.set({
     enabled: $("enabled").checked,

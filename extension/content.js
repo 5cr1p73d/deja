@@ -16,7 +16,7 @@
 
   function urlLooksLogin() {
     const u = (location.href || "").toLowerCase();
-    return /(\/login|\/signin|\/sign-in|\/auth(\/|$)|\/account\/login|\/sessions\/new|accounts\.google\.|login\.microsoftonline|appleid\.apple\.|oauth|sso)/.test(u);
+    return /(\/login|\/log-in|\/signin|\/sign-in|\/signup|\/sign-up|\/register|\/registration|\/create-account|\/auth(\/|$)|\/account\/login|\/sessions\/new|accounts\.google\.|login\.microsoftonline|appleid\.apple\.|oauth|\/sso)/.test(u);
   }
 
   let last = null;

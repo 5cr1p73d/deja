@@ -35,9 +35,20 @@ function isExcluded(domain) {
   return excluded.some(d => domain === d || domain.endsWith("." + d));
 }
 
+function normDomain(s) {
+  s = String(s || "").trim().toLowerCase();
+  if (!s) return "";
+  if (s.includes("://") || s.includes("/")) {
+    try { s = new URL(s.includes("://") ? s : "http://" + s).hostname; } catch (e) { s = s.split("/")[0]; }
+  }
+  s = s.replace(/^\.+/, "");
+  if (s.startsWith("www.")) s = s.slice(4);
+  return s;
+}
+
 async function loadCfg() {
   const c = await chrome.storage.local.get(["excludedDomains", "enabled"]);
-  excluded = (c.excludedDomains || []).map(s => String(s).toLowerCase().replace(/^\.+/, "").trim()).filter(Boolean);
+  excluded = (c.excludedDomains || []).map(normDomain).filter(Boolean);
   enabled = c.enabled !== false; // default ON nell'estensione; il vero gate è in Déjà
 }
 
