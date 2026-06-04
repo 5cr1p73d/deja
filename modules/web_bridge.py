@@ -26,7 +26,9 @@ _BROWSERS = {
     "vivaldi.exe", "firefox.exe", "browser.exe",
 }
 
-_STATE_MAX_AGE = 12.0  # s: oltre, lo stato è stantio (browser chiuso) → ignora
+# s: oltre, lo stato è stantio (browser chiuso) → ignora. Tollerante perché
+# l'estensione fa heartbeat ogni ~30s (limite minimo di chrome.alarms in MV3).
+_STATE_MAX_AGE = 75.0
 
 
 def state_path() -> str:

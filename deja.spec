@@ -15,6 +15,9 @@ datas += collect_data_files("transformers")
 # Asset dell'app (icona, ecc.)
 if os.path.isdir("assets"):
     datas += [("assets", "assets")]
+# Host native messaging dell'estensione browser (per `deja.exe --web-host`).
+if os.path.isdir(os.path.join("extension", "host")):
+    datas += [(os.path.join("extension", "host"), os.path.join("extension", "host"))]
 # Eventuale Tesseract bundlato: copia la cartella "tesseract/" se presente
 # accanto allo spec (tesseract.exe + tessdata). Opzionale.
 if os.path.isdir("tesseract"):
