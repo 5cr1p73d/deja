@@ -222,6 +222,14 @@ def main():
     threads = []
     t_capture = threading.Thread(target=capturer.run, args=(stop_event,), daemon=True)
     t_capture.start(); threads.append(t_capture)
+    # Watcher dell'estensione browser: ingerisce le pagine visitate dallo spool.
+    # Leggero, nessun ML; gira sempre (no-op se la feature è OFF).
+    try:
+        from modules import web_ingest
+        t_webingest = threading.Thread(target=web_ingest.run, args=(stop_event,), daemon=True)
+        t_webingest.start(); threads.append(t_webingest)
+    except Exception:
+        logging.getLogger("deja").exception("avvio web_ingest fallito (proseguo)")
     # Indexer (embedding) e Audio (Whisper) richiedono torch/ML: avviali solo se
     # disponibile. I loro run() degradano comunque da soli, ma evitiamo retry
     # inutili quando sappiamo già che torch non c'è.

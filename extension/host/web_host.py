@@ -17,6 +17,7 @@ import json
 import time
 import struct
 import tempfile
+import uuid
 
 
 def _data_dir() -> str:
@@ -27,6 +28,39 @@ def _data_dir() -> str:
     except Exception:
         pass
     return d
+
+
+def _inbox_dir() -> str:
+    d = os.path.join(_data_dir(), "web_inbox")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def _write_page(page: dict) -> None:
+    """Scrive una pagina visitata nello spool (l'app la inserisce nel DB)."""
+    d = _inbox_dir()
+    rec = {
+        "v": 1, "ts": time.time(),
+        "url": str(page.get("url", ""))[:2048],
+        "domain": str(page.get("domain", ""))[:255],
+        "title": str(page.get("title", ""))[:512],
+        "text": str(page.get("text", ""))[:20000],
+        "links": page.get("links") if isinstance(page.get("links"), list) else [],
+    }
+    rec["links"] = [str(x)[:2048] for x in rec["links"][:100]]
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+        os.replace(tmp, os.path.join(d, uuid.uuid4().hex + ".json"))
+    except Exception:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
 
 
 def _write_state(tab: dict) -> None:
@@ -69,7 +103,9 @@ def main():
             break
         if msg is None:
             break
-        if isinstance(msg, dict) and msg.get("type") == "state":
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("type") == "state":
             tab = msg.get("tab") or {}
             _write_state({
                 "domain": str(tab.get("domain", ""))[:255],
@@ -77,7 +113,8 @@ def main():
                 "is_login": bool(tab.get("is_login")),
                 "is_excluded": bool(tab.get("is_excluded")),
             })
-        # Altri tipi (es. "page" per l'ingest contenuto) verranno gestiti in F2.
+        elif msg.get("type") == "page":
+            _write_page(msg.get("page") or {})
 
 
 if __name__ == "__main__":

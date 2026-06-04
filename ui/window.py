@@ -4075,6 +4075,30 @@ class DejaWindow(QWidget):
         self._stop_audio() if self._is_playing else None
         self._reset_audio_player()
 
+        # ── Pagina web (estensione browser) ──────────────────────
+        if r.get("type") == "web":
+            self._current_type = "web"; self._current_pixmap = None; self._current_audio = None
+            self.preview_lbl.clear()
+            try:
+                self.pin_btn.setEnabled(False); self.tag_input.setEnabled(False)
+            except Exception:
+                pass
+            url = r.get("url", ""); title = r.get("title", "") or url; text = r.get("text", "")
+            self.preview_info.setText(f"🌐 {r.get('domain','')}   •   {r['ts'][:19].replace('T', ' ')}")
+            self.preview_lbl.setTextFormat(Qt.TextFormat.RichText)
+            self.preview_lbl.setOpenExternalLinks(True)
+            self.preview_lbl.setWordWrap(True)
+            self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            self.preview_lbl.setText(
+                f"<b style='font-size:16px; color:#f3f4f6'>{_html.escape(title)}</b><br>"
+                f"<a href='{_html.escape(url)}' style='color:#a78bfa'>{_html.escape(url)}</a>"
+                f"<br><br><span style='color:#d6d6dd'>{_html.escape(text)}</span>"
+            )
+            self.preview_lbl.setStyleSheet(
+                f"background:transparent; color:{TEXT_PRIMARY}; font-size:14px; padding:16px; line-height:1.6;")
+            self._preview_panel.set_border_kind("ai"); self._set_action_btns("neutral")
+            return
+
         # Pin + tags state per item corrente
         kind = "ss" if r.get("type") == "screenshot" else "au"
         try:

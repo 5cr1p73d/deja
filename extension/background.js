@@ -89,9 +89,15 @@ chrome.tabs.onUpdated.addListener((id, info) => { if (info.url || info.status ==
 chrome.windows.onFocusChanged.addListener(() => pushActive());
 chrome.tabs.onRemoved.addListener(id => { delete loginByTab[id]; });
 chrome.runtime.onMessage.addListener((msg, sender) => {
-  if (msg && msg.type === "login" && sender.tab) {
+  if (!msg) return;
+  if (msg.type === "login" && sender.tab) {
     loginByTab[sender.tab.id] = !!msg.is_login;
     pushActive();
+  } else if (msg.type === "page" && enabled) {
+    // Inoltra il contenuto pagina all'host (che lo mette nello spool).
+    const domain = (msg.page && msg.page.domain) || "";
+    if (isExcluded(domain)) return;             // dominio escluso: niente ingest
+    send({ type: "page", page: msg.page });
   }
 });
 
