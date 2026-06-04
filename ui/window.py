@@ -417,6 +417,28 @@ SETTINGS_QSS = """
 """
 
 
+class ModelDownloadWorker(QThread):
+    """Scarica (istanziando) un modello HuggingFace in background."""
+    done = pyqtSignal(bool, str)
+
+    def __init__(self, kind, model_id):
+        super().__init__()
+        self.kind = kind
+        self.model_id = model_id
+
+    def run(self):
+        try:
+            if self.kind == "embed":
+                from sentence_transformers import SentenceTransformer
+                m = SentenceTransformer(self.model_id); del m
+            elif self.kind == "whisper":
+                from faster_whisper import WhisperModel
+                m = WhisperModel(self.model_id, device="cpu", compute_type="int8"); del m
+            self.done.emit(True, "ok")
+        except Exception as e:
+            self.done.emit(False, str(e))
+
+
 class SettingsDialog(FramelessDialog):
     def __init__(self, parent=None):
         super().__init__(parent, title=t("win.set_title"))
@@ -485,47 +507,62 @@ class SettingsDialog(FramelessDialog):
             if self._lang_combo.itemData(i) == i18n.get_language():
                 self._lang_combo.setCurrentIndex(i)
         _field(gl, t("set.ui_language"), self._lang_combo)
-        self._ocr_combo = QComboBox()
-        try:
-            from ui.settings import OCR_PRESETS as _OCRP
-        except Exception:
-            _OCRP = ["ita+eng", "eng", "ita"]
-        cur_ocr = _get_setting("ocr_lang") or "ita+eng"
-        presets = list(_OCRP)
-        if cur_ocr not in presets:
-            presets.insert(0, cur_ocr)
-        for p in presets:
-            self._ocr_combo.addItem(p, p)
-        self._ocr_combo.setCurrentIndex(max(0, presets.index(cur_ocr)))
-        _field(gl, t("set.ocr_language"), self._ocr_combo)
         gnote = QLabel(t("set.restart_note")); gnote.setObjectName("caption"); gnote.setWordWrap(True)
         gl.addWidget(gnote); gl.addStretch()
         built["general"] = g_w
 
-        # ── Tab Ricerca ─────────────────────────────────────────
+        # ── Pagina Modelli ──────────────────────────────────────
+        from modules import model_catalog as _mc
         t_search = QWidget(); t_search.setStyleSheet("background:transparent;")
-        tsl = QVBoxLayout(t_search); tsl.setContentsMargins(24, 22, 24, 20); tsl.setSpacing(14)
+        tsl = QVBoxLayout(t_search); tsl.setContentsMargins(26, 24, 26, 20); tsl.setSpacing(8)
         srch_sec = QLabel(t("win.sec_models")); srch_sec.setObjectName("section"); tsl.addWidget(srch_sec)
-        for label, attr, placeholder in [
-            (t("win.f_embedding"), "EMBEDDING_MODEL", "es. paraphrase-multilingual-mpnet-base-v2"),
-            (t("win.f_whisper"),   "WHISPER_MODEL",   "tiny / base / small / medium"),
-        ]:
-            row = QHBoxLayout(); row.setSpacing(12)
-            lbl = QLabel(label); lbl.setObjectName("field"); lbl.setFixedWidth(160)
-            inp = QLineEdit(); inp.setPlaceholderText(placeholder)
-            if _cfg: inp.setText(str(getattr(_cfg, attr, "")))
-            inp.setObjectName(attr)
-            row.addWidget(lbl); row.addWidget(inp); tsl.addLayout(row)
 
+        # Embedding (ricerca): solo 768-dim per non rompere la tabella vettoriale.
+        cur_embed = str(getattr(_cfg, "EMBEDDING_MODEL", "")) if _cfg else ""
+        self._embed_combo = QComboBox()
+        self._fill_model_combo(self._embed_combo, _mc.EMBEDDING_MODELS, cur_embed, with_dims=True)
+        self._embed_cap, self._embed_dl = self._build_model_block(
+            tsl, t("mdl.embedding"), self._embed_combo, "embed")
+        self._embed_combo.currentIndexChanged.connect(lambda *_: self._refresh_model_cap("embed"))
+
+        # Whisper (trascrizione audio)
+        cur_whisper = str(getattr(_cfg, "WHISPER_MODEL", "")) if _cfg else ""
+        self._whisper_combo = QComboBox()
+        self._fill_model_combo(self._whisper_combo, _mc.WHISPER_MODELS, cur_whisper)
+        self._whisper_cap, self._whisper_dl = self._build_model_block(
+            tsl, t("mdl.whisper"), self._whisper_combo, "whisper")
+        self._whisper_combo.currentIndexChanged.connect(lambda *_: self._refresh_model_cap("whisper"))
+
+        # OCR (pacchetti lingua Tesseract) — spostato qui da Generale.
+        cur_ocr = _get_setting("ocr_lang") or "ita+eng"
+        self._ocr_combo = QComboBox()
+        ocr_ids = [m["id"] for m in _mc.OCR_MODELS]
+        for m in _mc.OCR_MODELS:
+            self._ocr_combo.addItem(f"{m['label']}  ·  {_mc.human_size(m['size_mb'])}", m["id"])
+        if cur_ocr not in ocr_ids:
+            self._ocr_combo.addItem(f"{cur_ocr} (custom)", cur_ocr)
+        self._ocr_combo.setCurrentIndex(max(0, self._ocr_combo.findData(cur_ocr)))
+        self._ocr_cap, _ = self._build_model_block(
+            tsl, t("mdl.ocr"), self._ocr_combo, "ocr", downloadable=False)
+        self._ocr_combo.currentIndexChanged.connect(lambda *_: self._refresh_model_cap("ocr"))
+
+        # Soglia rilevanza audio
+        tsl.addSpacing(8)
         row2 = QHBoxLayout(); row2.setSpacing(12)
-        lbl2 = QLabel(t("win.f_audio_threshold")); lbl2.setObjectName("field"); lbl2.setFixedWidth(160)
+        lbl2 = QLabel(t("win.f_audio_threshold")); lbl2.setObjectName("field"); lbl2.setFixedWidth(190)
         self._score_spin = QSpinBox()
         self._score_spin.setRange(1, 99); self._score_spin.setSuffix("%")
         try:
             self._score_spin.setValue(int(getattr(_cfg, "AUDIO_MIN_SCORE", 0.25) * 100))
         except Exception: self._score_spin.setValue(25)
         row2.addWidget(lbl2); row2.addWidget(self._score_spin); row2.addStretch()
-        tsl.addLayout(row2); tsl.addStretch()
+        tsl.addLayout(row2)
+
+        note = QLabel(t("mdl.note")); note.setObjectName("caption"); note.setWordWrap(True)
+        tsl.addSpacing(4); tsl.addWidget(note)
+        tsl.addStretch()
+        for _k in ("embed", "whisper", "ocr"):
+            self._refresh_model_cap(_k)
         built["models"] = t_search
 
         # ── Tab Cattura ─────────────────────────────────────────
@@ -879,6 +916,90 @@ class SettingsDialog(FramelessDialog):
                 app.setProperty("restart_requested", True)
                 app.quit()
 
+    # ── Scelta modelli (embedding / Whisper / OCR) ─────────────────
+    @staticmethod
+    def _fill_model_combo(combo, catalog, current_id, with_dims=False):
+        from modules import model_catalog as mc
+        combo.setEditable(False)
+        ids = [m["id"] for m in catalog]
+        for m in catalog:
+            extra = f"  ·  {m['dims']}d" if with_dims and m.get("dims") else ""
+            combo.addItem(
+                f"{m['label']}  ·  {mc.human_size(m['size_mb'])}  ·  {mc.human_ram(m['ram_mb'])}{extra}",
+                m["id"],
+            )
+        if current_id and current_id not in ids:
+            combo.addItem(f"{current_id} (custom)", current_id)
+        combo.setCurrentIndex(max(0, combo.findData(current_id)))
+
+    def _build_model_block(self, parent_lay, field_label, combo, kind, downloadable=True):
+        lbl = QLabel(field_label); lbl.setObjectName("field")
+        parent_lay.addWidget(lbl)
+        row = QHBoxLayout(); row.setSpacing(10)
+        combo.setMinimumWidth(300)
+        row.addWidget(combo, stretch=1)
+        dl = None
+        if downloadable:
+            dl = QPushButton(t("mdl.download")); dl.setObjectName("accent")
+            dl.setFixedHeight(36); dl.setCursor(Qt.CursorShape.PointingHandCursor)
+            dl.clicked.connect(lambda _=False, k=kind: self._download_model(k))
+            row.addWidget(dl)
+        parent_lay.addLayout(row)
+        cap = QLabel(""); cap.setObjectName("caption"); cap.setWordWrap(True)
+        parent_lay.addWidget(cap)
+        parent_lay.addSpacing(8)
+        return cap, dl
+
+    def _model_ctx(self, kind):
+        from modules import model_catalog as mc
+        if kind == "embed":
+            return self._embed_combo, mc.EMBEDDING_MODELS, self._embed_cap, self._embed_dl, True
+        if kind == "whisper":
+            return self._whisper_combo, mc.WHISPER_MODELS, self._whisper_cap, self._whisper_dl, True
+        return self._ocr_combo, mc.OCR_MODELS, self._ocr_cap, None, False
+
+    def _refresh_model_cap(self, kind):
+        from modules import model_catalog as mc
+        combo, catalog, cap, dl, is_hf = self._model_ctx(kind)
+        mid = combo.currentData() or combo.currentText()
+        m = mc.find(catalog, mid)
+        note = m.get("note", "") if m else t("mdl.custom")
+        if is_hf:
+            cached = mc.is_cached(mid)
+            status = t("mdl.cached") if cached else t("mdl.not_cached")
+            cap.setText(f"{note} — {status}" if note else status)
+            if dl is not None:
+                dl.setEnabled(not cached)
+                dl.setText(t("mdl.downloaded") if cached else t("mdl.download"))
+        else:
+            installed = mc.ocr_installed(mid) if mid else False
+            size = mc.human_size(m["size_mb"]) if m else "?"
+            status = t("mdl.installed") if installed else t("mdl.not_installed")
+            cap.setText(f"{size} — {status}")
+
+    def _download_model(self, kind):
+        combo, catalog, cap, dl, is_hf = self._model_ctx(kind)
+        if not is_hf:
+            return
+        mid = combo.currentData() or combo.currentText()
+        if not mid:
+            return
+        if dl is not None:
+            dl.setEnabled(False)
+        cap.setText(t("mdl.downloading"))
+        self._dl_worker = ModelDownloadWorker(kind, mid)
+        self._dl_worker.done.connect(lambda ok, msg, k=kind: self._on_download_done(k, ok, msg))
+        self._dl_worker.start()
+
+    def _on_download_done(self, kind, ok, msg):
+        combo, catalog, cap, dl, is_hf = self._model_ctx(kind)
+        if ok:
+            self._refresh_model_cap(kind)
+        else:
+            cap.setText("✗ " + msg)
+            if dl is not None:
+                dl.setEnabled(True)
+
     def _maybe_autodetect_models(self):
         """Se l'endpoint è configurato (key o locale), interroga i modelli disponibili
         e riempie la tendina. Silenzioso se fallisce (offline / key errata)."""
@@ -1081,10 +1202,20 @@ class SettingsDialog(FramelessDialog):
     def _save_and_close(self):
         from db import save_setting
 
-        # 1. Settings ricerca/cattura — persistenza completa
+        # 1a. Modelli (embedding / Whisper) dai combo della pagina Modelli
+        try:
+            import config as _config_mod
+            emb = self._embed_combo.currentData() or self._embed_combo.currentText().strip()
+            wsp = self._whisper_combo.currentData() or self._whisper_combo.currentText().strip()
+            if emb:
+                save_setting("embedding_model", emb); _config_mod.EMBEDDING_MODEL = emb
+            if wsp:
+                save_setting("whisper_model", wsp); _config_mod.WHISPER_MODEL = wsp
+        except Exception as e:
+            print(f"[Settings] Errore persist modelli: {e}")
+
+        # 1. Settings cattura (intervalli) — persistenza completa
         config_inputs = {
-            "EMBEDDING_MODEL":     "embedding_model",
-            "WHISPER_MODEL":       "whisper_model",
             "CAPTURE_INTERVAL":    "capture_interval",
             "AUDIO_CHUNK_SECONDS": "audio_chunk_seconds",
         }
