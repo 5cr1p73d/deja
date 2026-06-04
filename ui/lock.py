@@ -206,9 +206,11 @@ class LockDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(420)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.setWindowFlag(Qt.WindowType.Tool, True)  # niente bottone taskbar
         self.setStyleSheet(_QSS)
         self._unlocked = False
         self._fails = 0
+        self._revealed = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(32, 28, 32, 24)
@@ -252,11 +254,16 @@ class LockDialog(QDialog):
         if not self._use_hello and not self._use_pin:
             self.err.setText(t("lock.no_method"))
 
-        # Auto-tentativo Hello all'apertura (la finestra è già in foreground).
+        # Se c'è Hello: parti INVISIBILE (solo il prompt nativo di Hello si
+        # vede). La card PIN appare solo se Hello viene chiuso/fallisce.
         if self._use_hello:
+            self.setWindowOpacity(0.0)
             QTimer.singleShot(150, self._try_hello)
         elif self._use_pin:
+            self._revealed = True
             QTimer.singleShot(0, self.pin.setFocus)
+        else:
+            self._revealed = True
 
     def _center_on_cursor_screen(self):
         scr = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
@@ -264,9 +271,26 @@ class LockDialog(QDialog):
             g = scr.availableGeometry()
             self.move(g.center() - self.rect().center())
 
+    def _reveal(self, error_key=None):
+        """Mostra la card di sblocco di Déjà (PIN). Chiamata quando Hello è
+        chiuso/fallito, così le due UI non si sovrappongono."""
+        self._revealed = True
+        self.setWindowOpacity(1.0)
+        self.adjustSize()
+        self._center_on_cursor_screen()
+        self.raise_(); self.activateWindow()
+        _force_foreground(self)
+        if error_key:
+            self.err.setText(t(error_key))
+        if self._use_pin and hasattr(self, "pin"):
+            self.pin.setFocus()
+
     def showEvent(self, e):
         super().showEvent(e)
         self._center_on_cursor_screen()
+        if self._use_hello and not self._revealed:
+            # Resta invisibile: in primo piano c'è solo il prompt di Hello.
+            return
         self.raise_(); self.activateWindow()
         _force_foreground(self)
 
@@ -276,6 +300,10 @@ class LockDialog(QDialog):
         # sinistra) e facciamo polling per l'esito.
         if getattr(self, "_hello_running", False) or not self._use_hello:
             return
+        # Nascondi la card di Déjà mentre il prompt nativo di Hello è a schermo
+        # (anche su retry manuale): si vede solo una UI per volta.
+        self.setWindowOpacity(0.0)
+        self._revealed = False
         self._hello_running = True
         self._hello_result = None
         msg = t("lock.hello_msg")
@@ -324,9 +352,12 @@ class LockDialog(QDialog):
         if self._hello_result:
             self._unlocked = True
             self.accept()
-        elif not self._use_pin:
-            # Hello annullato/fallito e nessun PIN: mostra errore.
-            self.err.setText(t("lock.hello_fail"))
+            return
+        # Hello chiuso/fallito → mostra la card PIN di Déjà (o l'errore).
+        if self._use_pin:
+            self._reveal()
+        else:
+            self._reveal("lock.hello_fail")
 
     def _try_pin(self):
         if self._fails_locked():
