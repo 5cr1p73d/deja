@@ -1,4 +1,5 @@
 # ui/settings.py
+import sys
 import pyaudiowpatch as pyaudio
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QFrame
@@ -10,7 +11,31 @@ from i18n import t
 
 OCR_PRESETS = ["ita+eng", "eng", "ita", "spa+eng", "fra+eng", "deu+eng", "por+eng"]
 
-def _get_all_devices():
+# Script eseguito in un processo separato per enumerare i dispositivi audio.
+# PortAudio può abortire (assert C non catchabile in Python) se si crea una
+# seconda istanza PyAudio mentre il thread audio ha uno stream loopback attivo.
+# In un sottoprocesso pulito l'enumerazione riesce; se abortisce, muore solo il
+# figlio e il padre ottiene una lista vuota invece di crashare.
+_ENUM_SRC = (
+    "import json,sys\n"
+    "try:\n"
+    " import pyaudiowpatch as pa\n"
+    " p=pa.PyAudio(); out=[]\n"
+    " for i in range(p.get_device_count()):\n"
+    "  d=p.get_device_info_by_index(i)\n"
+    "  if d['maxInputChannels']>0 and not d.get('isLoopbackDevice',False):\n"
+    "   out.append(['mic',d['index'],d['name']])\n"
+    " try:\n"
+    "  for d in p.get_loopback_device_info_generator(): out.append(['loopback',d['index'],d['name']])\n"
+    " except Exception: pass\n"
+    " p.terminate(); sys.stdout.write(json.dumps(out))\n"
+    "except Exception: sys.stdout.write('[]')\n"
+)
+
+_DEVICES_CACHE = None
+
+
+def _enum_inprocess():
     pa = pyaudio.PyAudio(); devices = []
     for i in range(pa.get_device_count()):
         dev = pa.get_device_info_by_index(i)
@@ -19,8 +44,37 @@ def _get_all_devices():
     try:
         for dev in pa.get_loopback_device_info_generator():
             devices.append(("loopback", dev["index"], dev["name"]))
-    except: pass
+    except Exception:
+        pass
     pa.terminate(); return devices
+
+
+def _get_all_devices(force=False):
+    """Enumera mic + loopback in modo crash-safe (sottoprocesso), con cache."""
+    global _DEVICES_CACHE
+    if _DEVICES_CACHE is not None and not force:
+        return _DEVICES_CACHE
+    # In build frozen sys.executable è l'app stessa: `-c` rilancerebbe Déjà.
+    # Lì enumeriamo in-process (best effort).
+    if getattr(sys, "frozen", False):
+        try:
+            _DEVICES_CACHE = _enum_inprocess()
+        except Exception:
+            _DEVICES_CACHE = []
+        return _DEVICES_CACHE
+    import subprocess
+    import json
+    try:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        r = subprocess.run(
+            [sys.executable, "-c", _ENUM_SRC],
+            capture_output=True, text=True, timeout=20, creationflags=flags,
+        )
+        data = json.loads((r.stdout or "[]").strip() or "[]")
+        _DEVICES_CACHE = [(tp, idx, name) for tp, idx, name in data]
+    except Exception:
+        _DEVICES_CACHE = []
+    return _DEVICES_CACHE
 
 def save_setting(key, value):
     conn = get_conn()
