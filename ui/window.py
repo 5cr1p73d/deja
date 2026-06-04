@@ -3745,21 +3745,37 @@ class DejaWindow(QWidget):
 
     def _bring_to_front(self):
         """Forza l'overlay in primo piano col focus. Windows blocca
-        SetForegroundWindow se il processo non è già in foreground (es. lanciato
-        da terminale): aggiriamo con AttachThreadInput."""
+        SetForegroundWindow se il processo non è già in foreground (es. hotkey
+        mentre un'altra app è attiva o il terminale è minimizzato). Combiniamo:
+        restore + simulazione tasto ALT (sblocca il foreground-lock) +
+        AttachThreadInput."""
         try:
             import ctypes
-            hwnd = int(self.winId())
             u = ctypes.windll.user32
             k = ctypes.windll.kernel32
+            hwnd = int(self.winId())
+            SW_RESTORE = 9
             HWND_TOPMOST = -1
             SWP_NOSIZE = 0x0001; SWP_NOMOVE = 0x0002
-            u.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE)
+            VK_MENU = 0x12; KEYEVENTF_KEYUP = 0x0002
+
+            u.ShowWindow(hwnd, SW_RESTORE)
+            # Trucco ALT: una pressione fittizia sblocca il vincolo di foreground
+            # quando nessuna app "nostra" è in primo piano.
+            u.keybd_event(VK_MENU, 0, 0, 0)
+            u.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+
+            try:
+                u.AllowSetForegroundWindow(-1)  # ASFW_ANY
+            except Exception:
+                pass
+
             fg = u.GetForegroundWindow()
             cur = k.GetCurrentThreadId()
             ft = u.GetWindowThreadProcessId(fg, None) if fg else 0
             if ft and ft != cur:
                 u.AttachThreadInput(ft, cur, True)
+            u.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE)
             u.BringWindowToTop(hwnd)
             u.SetForegroundWindow(hwnd)
             if ft and ft != cur:
