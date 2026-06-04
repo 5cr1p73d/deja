@@ -81,4 +81,9 @@
   // Heartbeat leggero: pagine SPA possono mostrare/nascondere il form senza
   // mutazioni rilevate; ricontrolla ogni 3s.
   setInterval(check, 3000);
+  // Self-heal: ri-asserisce lo stato login al background ogni 15s, così se il
+  // service worker MV3 è ripartito (perdendo lo stato) torna coerente.
+  setInterval(() => {
+    try { chrome.runtime.sendMessage({ type: "login", is_login: last === true }); } catch (e) {}
+  }, 15000);
 })();
