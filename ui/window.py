@@ -175,35 +175,25 @@ ITEM_TYPE_ROLE = Qt.ItemDataRole.UserRole + 1
 ITEM_HEADER_ROLE = Qt.ItemDataRole.UserRole + 2
 ITEM_THUMB_ROLE = Qt.ItemDataRole.UserRole + 3   # QPixmap miniatura screenshot
 
-# Cache miniature screenshot per id (decodifica costosa: fatta una volta).
-_THUMB_CACHE = {}
-_THUMB_PX = 96  # lato sorgente cache (downscale netto nel delegate)
+# Cache miniature screenshot per id. Le thumbnail si caricano PIGRAMENTE solo
+# per le righe visibili (vedi DejaWindow._ensure_visible_thumbs): in "Esplora"
+# la lista può avere migliaia di item — decodificarle tutte freezerebbe la UI.
+_THUMB_CACHE = {}            # id -> QPixmap | None (None = nessuna immagine)
+_THUMB_PX = 96              # lato sorgente cache (downscale netto nel delegate)
 
 
-def _load_thumb(shot_id):
-    """Miniatura QPixmap della cattura `shot_id` (o None). Cache per id."""
-    if shot_id in _THUMB_CACHE:
-        return _THUMB_CACHE[shot_id]
-    pm = None
+def _decode_thumb(blob):
+    """Decodifica un blob immagine in una QPixmap miniatura cover (o None).
+    Nessun accesso DB: il chiamante fornisce i byte (batch con 1 sola conn)."""
     try:
-        conn = get_conn()
-        row = conn.cursor().execute(
-            "SELECT image FROM screenshots WHERE id=?", (shot_id,)
-        ).fetchone()
-        conn.close()
-        if row and row[0]:
-            src = QPixmap()
-            if src.loadFromData(bytes(row[0])) and not src.isNull():
-                # scala "cover" a un quadrato cache, poi il delegate ritaglia
-                pm = src.scaled(_THUMB_PX, _THUMB_PX,
-                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation)
+        src = QPixmap()
+        if blob and src.loadFromData(bytes(blob)) and not src.isNull():
+            return src.scaled(_THUMB_PX, _THUMB_PX,
+                              Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                              Qt.TransformationMode.SmoothTransformation)
     except Exception:
-        pm = None
-    if len(_THUMB_CACHE) > 400:
-        _THUMB_CACHE.clear()
-    _THUMB_CACHE[shot_id] = pm
-    return pm
+        pass
+    return None
 
 
 def _date_bucket_label(ts_iso):
@@ -4066,6 +4056,8 @@ class DejaWindow(QWidget):
         """Scroll-infinito: vicino al fondo, carica la pagina successiva."""
         # tieni l'evidenziatore di selezione agganciato alla riga durante lo scroll
         self._move_sel_highlight(animate=False)
+        # carica le miniature delle nuove righe entrate nel viewport
+        self._ensure_visible_thumbs()
         if not getattr(self, "_all_mode", False) or not getattr(self, "_all_paginable", False):
             return
         if self._active_date != "all" or getattr(self, "_all_page_loading", False):
@@ -4174,12 +4166,12 @@ class DejaWindow(QWidget):
             tag = "✓ esatto" if r.get("exact") else f"{int(r['score'] * 100)}%"
             item = QListWidgetItem(f"{title}\n{ts_rel}   •   {tag}")
             item.setData(Qt.ItemDataRole.UserRole, i); item.setData(ITEM_TYPE_ROLE, "audio" if is_audio else "screenshot")
-            if not is_audio and r.get("id") is not None:
-                item.setData(ITEM_THUMB_ROLE, _load_thumb(r.get("id")))
             self.results_list.addItem(item)
         # Aggiorna count badges
         self._update_filter_pill_counts()
         self._animate_results_in()
+        # Miniature: caricate pigramente solo per le righe visibili (no freeze).
+        QTimer.singleShot(0, self._ensure_visible_thumbs)
 
     def _animate_results_in(self):
         """Fade-in morbido della lista quando i risultati cambiano (Refined II)."""
@@ -4198,6 +4190,54 @@ class DejaWindow(QWidget):
         # nuova lista → la selezione si resetta: nascondi l'evidenziatore
         try:
             self._sel_hl.hide()
+        except Exception:
+            pass
+
+    def _ensure_visible_thumbs(self):
+        """Carica le miniature SOLO per le righe screenshot visibili, con UNA
+        sola connessione DB. In "Esplora" la lista ha migliaia di item:
+        decodificarle tutte freezerebbe la UI. Chiamata dopo populate e su scroll."""
+        try:
+            lw = self.results_list
+            vph = lw.viewport().rect().height()
+            n = lw.count()
+            if n == 0:
+                return
+            top_it = lw.itemAt(4, 4); bot_it = lw.itemAt(4, max(4, vph - 4))
+            start = lw.row(top_it) if top_it is not None else 0
+            end = lw.row(bot_it) if bot_it is not None else n - 1
+            start = max(0, start - 2); end = min(n - 1, end + 3)
+            need = []
+            for i in range(start, end + 1):
+                it = lw.item(i)
+                if it is None or it.data(ITEM_HEADER_ROLE):
+                    continue
+                if it.data(ITEM_TYPE_ROLE) != "screenshot" or it.data(ITEM_THUMB_ROLE) is not None:
+                    continue
+                idx = it.data(Qt.ItemDataRole.UserRole)
+                if idx is None or idx >= len(self._filtered):
+                    continue
+                sid = self._filtered[idx].get("id")
+                if sid is not None:
+                    need.append((it, sid))
+            if not need:
+                return
+            conn = get_conn()
+            try:
+                cur = conn.cursor()
+                for it, sid in need:
+                    if sid in _THUMB_CACHE:
+                        pm = _THUMB_CACHE[sid]
+                    else:
+                        row = cur.execute("SELECT image FROM screenshots WHERE id=?", (sid,)).fetchone()
+                        pm = _decode_thumb(row[0]) if row and row[0] else None
+                        if len(_THUMB_CACHE) > 1500:
+                            _THUMB_CACHE.clear()
+                        _THUMB_CACHE[sid] = pm
+                    it.setData(ITEM_THUMB_ROLE, pm if pm is not None else False)
+            finally:
+                conn.close()
+            lw.viewport().update()
         except Exception:
             pass
 
