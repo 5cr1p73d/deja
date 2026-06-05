@@ -19,10 +19,11 @@ from PyQt6.QtCore import (
     QRect, QRectF, QTimer, QSize, QPointF
 )
 from PyQt6.QtGui import (
-    QFont, QPixmap, QColor, QPainter, QPainterPath, QBrush,
-    QRegion, QPen, QLinearGradient, QRadialGradient, QKeyEvent, QIcon
+    QFont, QFontMetrics, QPixmap, QColor, QPainter, QPainterPath, QBrush,
+    QRegion, QPen, QLinearGradient, QRadialGradient, QKeyEvent, QIcon, QPolygonF
 )
 
+from ui.theme import INK, INK_SOFT, INK_DIM, INK_FAINT, EMERALD
 from db import get_conn
 from modules import search as search_module
 from modules import ai_assistant
@@ -40,25 +41,30 @@ except Exception:
 # Risolto a runtime sul font più elegante disponibile (resolve_ui_font),
 # poi usato da tutti i QFont(UI_FONT, ...) e applicato all'app.
 UI_FONT = "Segoe UI"
+MONO_FONT = "Consolas"
 
 
 def resolve_ui_font(app=None):
-    """Sceglie il miglior font UI disponibile e lo applica all'app.
-    Da chiamare dopo aver creato QApplication, prima di costruire la UI."""
-    global UI_FONT
+    """Carica i font del design system (Geist + Geist Mono) e li applica all'app.
+    Da chiamare dopo aver creato QApplication, prima di costruire la UI.
+
+    Delega a ui.theme.load_fonts (single source of truth) e ne riflette il
+    risultato in UI_FONT/MONO_FONT, usati dai QFont(UI_FONT, ...) sparsi qui."""
+    global UI_FONT, MONO_FONT
     try:
-        from PyQt6.QtGui import QFontDatabase
-        fams = set(QFontDatabase.families())
-        for cand in ("Inter", "Segoe UI Variable Text", "Segoe UI Variable",
-                     "Segoe UI", "Selawik", "Arial"):
-            if cand in fams:
-                UI_FONT = cand
-                break
+        from ui import theme
+        UI_FONT, MONO_FONT = theme.load_fonts(app)
     except Exception:
-        pass
-    if app is not None:
+        # Fallback: vecchia euristica su font di sistema.
         try:
-            f = app.font(); f.setFamily(UI_FONT); app.setFont(f)
+            from PyQt6.QtGui import QFontDatabase
+            fams = set(QFontDatabase.families())
+            for cand in ("Segoe UI Variable Text", "Segoe UI", "Selawik", "Arial"):
+                if cand in fams:
+                    UI_FONT = cand
+                    break
+            if app is not None:
+                f = app.font(); f.setFamily(UI_FONT); app.setFont(f)
         except Exception:
             pass
     return UI_FONT
@@ -1506,115 +1512,135 @@ class MinimalItemDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        rect = QRectF(option.rect).adjusted(6, 4, -6, -4)
-        path = QPainterPath(); path.addRoundedRect(rect, 11, 11)
+        rect = QRectF(option.rect).adjusted(6, 3, -6, -3)
+        path = QPainterPath(); path.addRoundedRect(rect, 10, 10)
 
         item_type = index.data(ITEM_TYPE_ROLE)
         is_audio = item_type == "audio"
         is_sel = bool(option.state & QStyle.StateFlag.State_Selected)
         is_hov = bool(option.state & QStyle.StateFlag.State_MouseOver)
 
-        cat_r, cat_g, cat_b = C_AUDIO_RGB if is_audio else C_SS_RGB
+        VR, VG, VB = C_AI_RGB                       # viola = accento unico
+        cat_r, cat_g, cat_b = C_AUDIO_RGB if is_audio else C_SS_RGB  # tinta tipo (badge)
 
-        # 1. Background — gradient verticale per profondità
+        # 1. Background — selezione/hover sobri (Raycast), niente colore di categoria
         if is_sel:
-            g = QLinearGradient(0, rect.top(), 0, rect.bottom())
-            g.setColorAt(0.0, QColor(cat_r, cat_g, cat_b, 38))
-            g.setColorAt(1.0, QColor(cat_r, cat_g, cat_b, 14))
-            painter.fillPath(path, QBrush(g))
-        elif is_hov:
-            g = QLinearGradient(0, rect.top(), 0, rect.bottom())
-            g.setColorAt(0.0, QColor(255, 255, 255, 14))
-            g.setColorAt(1.0, QColor(255, 255, 255, 4))
-            painter.fillPath(path, QBrush(g))
-        else:
-            g = QLinearGradient(0, rect.top(), 0, rect.bottom())
-            g.setColorAt(0.0, QColor(28, 28, 34, 160))
-            g.setColorAt(1.0, QColor(20, 20, 26, 160))
-            painter.fillPath(path, QBrush(g))
-
-        # 2. Top highlight — sottilissima riga chiara in alto
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(255, 255, 255, 22 if not is_sel else 40), 1.0))
-        painter.drawLine(QPointF(rect.left() + 12, rect.top() + 1),
-                         QPointF(rect.right() - 12, rect.top() + 1))
-
-        # 3. Border
-        if is_sel:
-            painter.setPen(QPen(QColor(cat_r, cat_g, cat_b, 180), 1.2))
-        else:
-            painter.setPen(QPen(QColor(255, 255, 255, 14), 1.0))
-        painter.drawPath(path)
-
-        # 4. Left accent bar (selezione)
-        if is_sel:
+            painter.fillPath(path, QColor(255, 255, 255, 16))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(255, 255, 255, 30), 1.0))
+            painter.drawPath(path)
+            # barra accento viola a sinistra
             bar = QPainterPath()
-            bar.addRoundedRect(QRectF(rect.left() + 1.5, rect.top() + 12,
-                                      3.0, rect.height() - 24), 1.5, 1.5)
-            grad_bar = QLinearGradient(0, rect.top(), 0, rect.bottom())
-            grad_bar.setColorAt(0.0, QColor(cat_r, cat_g, cat_b, 255))
-            grad_bar.setColorAt(1.0, QColor(cat_r, cat_g, cat_b, 140))
-            painter.fillPath(bar, QBrush(grad_bar))
+            bar.addRoundedRect(QRectF(rect.left() + 2, rect.top() + 11,
+                                      2.5, rect.height() - 22), 1.5, 1.5)
+            painter.fillPath(bar, QColor(VR, VG, VB, 255))
+        elif is_hov:
+            painter.fillPath(path, QColor(255, 255, 255, 8))
 
-        # 5. Avatar: cerchio app color + lettera, oppure waveform per audio
-        icon_cx = rect.left() + 30
-        icon_cy = rect.center().y()
+        # 2. Avatar squircle (rounded-rect) — colore app, iniziale scura
+        AV = 30.0
+        ax = rect.left() + 12
+        ay = rect.center().y() - AV / 2
+        av_rect = QRectF(ax, ay, AV, AV)
+        av_path = QPainterPath(); av_path.addRoundedRect(av_rect, 8, 8)
 
-        # Estrai app name dal display (riga 1)
         display_full = index.data(Qt.ItemDataRole.DisplayRole) or ""
         first_line = display_full.split("\n", 1)[0] if display_full else ""
+
         if is_audio:
-            # Mantieni waveform stilizzato + cerchio tinta categoria
-            ic = QColor(cat_r, cat_g, cat_b, 255 if is_sel else 200)
-            circ_bg = QColor(cat_r, cat_g, cat_b, 28 if is_sel else 18)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(circ_bg))
-            painter.drawEllipse(QPointF(icon_cx, icon_cy), 15, 15)
-            painter.setPen(QPen(ic, 1.7, cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            hs = [4, 9, 13, 9, 4]; gi = 4.5
-            sx = icon_cx - (len(hs) - 1) * gi / 2
+            base = QColor(cat_r, cat_g, cat_b)
+        else:
+            app_r, app_g, app_b = _app_color_rgb(first_line)
+            base = QColor(app_r, app_g, app_b)
+        # fill leggermente smorzato per non gridare
+        fill = QColor(base); fill.setAlpha(235 if is_sel else 205)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.fillPath(av_path, fill)
+        # inner highlight ring
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(255, 255, 255, 36), 1.0))
+        painter.drawPath(av_path)
+
+        if is_audio:
+            # waveform scuro dentro lo squircle
+            painter.setPen(QPen(QColor(14, 14, 18, 235), 1.7,
+                                cap=Qt.PenCapStyle.RoundCap))
+            hs = [4, 8, 12, 8, 4]; gi = 4.0
+            cx = av_rect.center().x(); cy = av_rect.center().y()
+            sx = cx - (len(hs) - 1) * gi / 2
             for i, bh in enumerate(hs):
                 bx = sx + i * gi
-                painter.drawLine(QPointF(bx, icon_cy - bh / 2), QPointF(bx, icon_cy + bh / 2))
+                painter.drawLine(QPointF(bx, cy - bh / 2), QPointF(bx, cy + bh / 2))
         else:
-            # Cerchio colore app + lettera iniziale
-            app_r, app_g, app_b = _app_color_rgb(first_line)
-            circ_bg = QColor(app_r, app_g, app_b, 60 if is_sel else 40)
-            ring    = QColor(app_r, app_g, app_b, 220 if is_sel else 160)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(circ_bg))
-            painter.drawEllipse(QPointF(icon_cx, icon_cy), 15, 15)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(ring, 1.4))
-            painter.drawEllipse(QPointF(icon_cx, icon_cy), 14.5, 14.5)
             initial = _app_initial(first_line)
-            painter.setPen(QColor(255, 255, 255, 240 if is_sel else 220))
-            painter.setFont(QFont(UI_FONT, 11, QFont.Weight.Bold))
-            painter.drawText(QRectF(icon_cx - 12, icon_cy - 12, 24, 24),
-                             Qt.AlignmentFlag.AlignCenter, initial)
+            painter.setPen(QColor(14, 14, 18, 240))
+            painter.setFont(QFont(UI_FONT, 12, QFont.Weight.Bold))
+            painter.drawText(av_rect, Qt.AlignmentFlag.AlignCenter, initial)
 
-        # 6. Text
-        tx = rect.left() + 60
-        tw = rect.width() - 60 - 14
+        # 3. Badge tipo (cerchietto in basso a destra dell'avatar)
+        bcx = av_rect.right() - 2; bcy = av_rect.bottom() - 2
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(14, 14, 18))
+        painter.drawEllipse(QPointF(bcx, bcy), 7.0, 7.0)
+        gcol = QColor(cat_r, cat_g, cat_b, 255)
+        if is_audio:
+            painter.setPen(QPen(gcol, 1.3, cap=Qt.PenCapStyle.RoundCap))
+            for dx, hh in ((-2.0, 3.0), (0.0, 5.0), (2.0, 3.0)):
+                painter.drawLine(QPointF(bcx + dx, bcy - hh / 2), QPointF(bcx + dx, bcy + hh / 2))
+        else:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(gcol, 1.2, join=Qt.PenJoinStyle.RoundJoin))
+            painter.drawRoundedRect(QRectF(bcx - 3.0, bcy - 2.4, 6.0, 4.8), 1.0, 1.0)
+
+        # 4. Testo — titolo + sotto-riga; score a destra in mono
+        display = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        lines = display.split("\n", 1)
+        score_txt = ""
+        sub_txt = lines[1] if len(lines) > 1 else ""
+        if "•" in sub_txt:
+            left, right = sub_txt.split("•", 1)
+            sub_txt = left.strip(); score_txt = right.strip()
+
+        tx = av_rect.right() + 13
+        score_w = 56.0
+        tw = rect.right() - 14 - score_w - tx
         content_h = self.TITLE_H + self.SUB_H
         gap = (rect.height() - content_h) / 3.0
         title_y = rect.top() + gap
         sub_y = title_y + self.TITLE_H + gap
 
-        display = index.data(Qt.ItemDataRole.DisplayRole) or ""
-        lines = display.split("\n", 1)
-
-        painter.setPen(QColor("#ffffff") if is_sel else QColor("#e6e6ec"))
+        fm_title = QFontMetrics(QFont(UI_FONT, 11, QFont.Weight.DemiBold))
+        elided = fm_title.elidedText(lines[0] if lines else "", Qt.TextElideMode.ElideRight, int(tw))
+        painter.setPen(QColor(INK) if is_sel else QColor("#dcdce4"))
         painter.setFont(QFont(UI_FONT, 11, QFont.Weight.DemiBold))
         painter.drawText(QRectF(tx, title_y, tw, self.TITLE_H),
-                         Qt.AlignmentFlag.AlignVCenter, lines[0] if lines else "")
+                         Qt.AlignmentFlag.AlignVCenter, elided)
 
-        if len(lines) > 1:
-            painter.setPen(QColor(cat_r, cat_g, cat_b, 245) if is_sel else QColor(TEXT_SECONDARY))
-            painter.setFont(QFont(UI_FONT, 9, QFont.Weight.Medium))
+        if sub_txt:
+            painter.setPen(QColor(INK_DIM))
+            painter.setFont(QFont(UI_FONT, 9, QFont.Weight.Normal))
             painter.drawText(QRectF(tx, sub_y, tw, self.SUB_H),
-                             Qt.AlignmentFlag.AlignVCenter, lines[1])
+                             Qt.AlignmentFlag.AlignVCenter, sub_txt)
+
+        if score_txt:
+            exact = "✓" in score_txt or "esatt" in score_txt.lower()
+            sb = QRectF(rect.right() - 14 - score_w, rect.top(), score_w, rect.height())
+            if exact:
+                # check vettoriale (Geist Mono non ha ✓) + "esatto"
+                painter.setFont(QFont(MONO_FONT, 9, QFont.Weight.Medium))
+                painter.setPen(QColor(EMERALD))
+                painter.drawText(sb, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "esatto")
+                cy = sb.center().y()
+                cx = sb.right() - QFontMetrics(QFont(MONO_FONT, 9, QFont.Weight.Medium)).horizontalAdvance("esatto") - 9
+                painter.setPen(QPen(QColor(EMERALD), 1.4, cap=Qt.PenCapStyle.RoundCap,
+                                    join=Qt.PenJoinStyle.RoundJoin))
+                painter.drawPolyline(QPolygonF([QPointF(cx, cy + 0.5),
+                                                QPointF(cx + 2.4, cy + 2.8),
+                                                QPointF(cx + 6.2, cy - 3.0)]))
+            else:
+                painter.setPen(QColor(INK_FAINT))
+                painter.setFont(QFont(MONO_FONT, 9, QFont.Weight.Medium))
+                painter.drawText(sb, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, score_txt)
 
         painter.restore()
 
