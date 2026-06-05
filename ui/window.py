@@ -3612,6 +3612,7 @@ class DejaWindow(QWidget):
         self._sel_hl = _SelHighlight(self.results_list.viewport())
         self.results_list.currentRowChanged.connect(self._on_row_changed)
         self.results_list.currentRowChanged.connect(lambda _r: self._move_sel_highlight(True))
+        self.results_list.currentRowChanged.connect(lambda _r: self._fade_preview())
         self.results_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.results_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.results_list.customContextMenuRequested.connect(self._on_results_context_menu)
@@ -4169,6 +4170,20 @@ class DejaWindow(QWidget):
         # nuova lista → la selezione si resetta: nascondi l'evidenziatore
         try:
             self._sel_hl.hide()
+        except Exception:
+            pass
+
+    def _fade_preview(self):
+        """Cross-fade morbido del pannello preview a ogni cambio selezione."""
+        try:
+            eff = QGraphicsOpacityEffect(self._preview_panel)
+            self._preview_panel.setGraphicsEffect(eff)
+            a = QPropertyAnimation(eff, b"opacity", self)
+            a.setDuration(200); a.setStartValue(0.3); a.setEndValue(1.0)
+            a.setEasingCurve(QEasingCurve.Type.OutCubic)
+            a.finished.connect(lambda: self._preview_panel.setGraphicsEffect(None))
+            a.start()
+            self._preview_fade = a  # ref anti-GC
         except Exception:
             pass
 
