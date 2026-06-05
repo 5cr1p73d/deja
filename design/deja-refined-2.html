@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Déjà — Refined II</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:        #0e0e12;
+    --surface:   #131319;
+    --surface-2: #101015;
+    --raise:     #17171e;
+    --sel:       rgba(255,255,255,.06);
+    --ink:       #f4f4f6;
+    --ink-soft:  #9a9aa6;
+    --ink-dim:   #6c6c78;
+    --ink-faint: #4c4c56;
+
+    --violet:    #a78bfa;
+    --amber:     #f59e0b;
+    --emerald:   #10b981;
+    --pink:      #fb7185;
+    --green:     #34d399;
+    --blue:      #60a5fa;
+    --teal:      #5eead4;
+
+    --line:      rgba(255,255,255,.07);
+    --line-soft: rgba(255,255,255,.04);
+    --ease:      cubic-bezier(.22,.61,.36,1);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Geist", sans-serif; color: var(--ink);
+    background: radial-gradient(140% 100% at 50% -20%, #16161d 0%, var(--bg) 50%, #08080a 100%);
+    min-height: 100vh; display: grid; place-items: center; overflow: hidden;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+
+  .palette {
+    width: min(780px, 95vw);
+    background: var(--surface); border: 1px solid var(--line); border-radius: 15px; overflow: hidden;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.5), 0 1px 0 rgba(255,255,255,.05) inset,
+                0 36px 70px -26px rgba(0,0,0,.88), 0 14px 28px -18px rgba(0,0,0,.6);
+    animation: rise .5s var(--ease) both;
+  }
+
+  /* search */
+  .bar { display: flex; align-items: center; gap: 13px; padding: 15px 18px; }
+  .ic { width: 19px; height: 19px; flex: none; color: var(--ink-dim); }
+  .input { flex: 1; display: flex; align-items: center; font-size: 17px; min-width: 0; }
+  .input .typed { white-space: pre; }
+  .input .cur { width: 1.5px; height: 20px; background: var(--violet); margin-left: 1px; animation: blink 1.1s steps(1) infinite; }
+  .seg { display: flex; gap: 2px; flex: none; }
+  .seg button { font-family: "Geist"; font-size: 12px; font-weight: 500; color: var(--ink-dim); cursor: pointer;
+                background: none; border: none; border-radius: 7px; padding: 5px 11px; transition: all .18s var(--ease); }
+  .seg button:hover { color: var(--ink-soft); background: rgba(255,255,255,.03); }
+  .seg button.on { color: var(--ink); background: var(--raise); box-shadow: 0 0 0 1px var(--line) inset; }
+  .sep { height: 1px; background: var(--line-soft); }
+
+  /* split body */
+  .body { display: grid; grid-template-columns: 1fr 312px; min-height: 372px; }
+  .listwrap { position: relative; padding: 8px; max-height: 372px; overflow-y: auto; border-right: 1px solid var(--line); }
+  .listwrap::-webkit-scrollbar { width: 8px; }
+  .listwrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,.06); border-radius: 8px; border: 2px solid var(--surface); }
+
+  /* sliding selection highlight */
+  .hl { position: absolute; left: 8px; right: 8px; height: 0; border-radius: 9px;
+        background: var(--sel); box-shadow: 0 0 0 1px var(--line) inset; z-index: 0;
+        transition: top .22s var(--ease), height .22s var(--ease); pointer-events: none; }
+  .hl::before { content: ""; position: absolute; left: 0; top: 9px; bottom: 9px; width: 2px; border-radius: 2px;
+                background: var(--accent, var(--violet)); box-shadow: 0 0 10px -1px var(--accent, var(--violet)); transition: background .22s; }
+
+  .group { font-family: "Geist Mono"; font-size: 10.5px; font-weight: 500; letter-spacing: .08em;
+           text-transform: uppercase; color: var(--ink-faint); padding: 12px 12px 6px; position: relative; z-index: 1; }
+
+  .row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 11px;
+         padding: 9px 12px; border-radius: 9px; cursor: pointer; position: relative; z-index: 1;
+         opacity: 0; animation: row .42s var(--ease) forwards; }
+  .ava { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; position: relative;
+         font-size: 12px; font-weight: 600; color: #0e0e12; background: var(--hue); }
+  .ava::after { content: ""; position: absolute; inset: 0; border-radius: 8px; box-shadow: 0 0 0 1px rgba(255,255,255,.14) inset; }
+  .ava .kind { position: absolute; right: -3px; bottom: -3px; width: 14px; height: 14px; border-radius: 50%;
+               background: var(--bg); display: grid; place-items: center; box-shadow: 0 0 0 1.5px var(--surface); }
+  .ava .kind svg { width: 8px; height: 8px; color: var(--ink-soft); }
+
+  .mid { min-width: 0; }
+  .mid .ttl { font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 7px; }
+  .mid .ttl .sub { color: var(--ink-faint); font-weight: 400; font-size: 12.5px; }
+  .mid .ttl .pin { color: var(--amber); margin-left: 1px; }
+  .mid .prev { font-size: 12.5px; color: var(--ink-dim); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mid .prev mark { background: none; color: var(--violet); font-weight: 600; }
+  .right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+  .right .time { font-family: "Geist Mono"; font-size: 11px; color: var(--ink-faint); }
+  .right .tags { display: flex; gap: 4px; }
+  .right .tag { font-size: 10px; color: var(--ink-dim); background: rgba(255,255,255,.04);
+                border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; }
+
+  /* preview pane */
+  .pane { background: var(--surface-2); padding: 16px; display: flex; flex-direction: column; gap: 13px; overflow-y: auto; }
+  .cap { border-radius: 11px; overflow: hidden; border: 1px solid var(--line); background: #0c0c10; }
+  .cap .chrome { height: 24px; display: flex; align-items: center; gap: 5px; padding: 0 9px;
+                 background: var(--hue); position: relative; }
+  .cap .chrome i { width: 7px; height: 7px; border-radius: 50%; background: rgba(0,0,0,.35); }
+  .cap .chrome span { position: absolute; left: 50%; transform: translateX(-50%); font-size: 9.5px;
+                      font-family: "Geist Mono"; color: rgba(0,0,0,.55); }
+  .cap .shot { padding: 13px; display: flex; flex-direction: column; gap: 7px;
+               background: linear-gradient(180deg, #111116, #0c0c10); }
+  .cap .shot b { height: 9px; border-radius: 3px; background: rgba(255,255,255,.1); }
+  .cap .shot b.s1 { width: 80%; } .cap .shot b.s2 { width: 95%; } .cap .shot b.s3 { width: 60%; }
+  .cap .shot .hi { background: rgba(167,139,250,.35); }
+
+  .pmeta { display: flex; align-items: center; gap: 9px; }
+  .pmeta .src { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; }
+  .pmeta .src .d { width: 8px; height: 8px; border-radius: 50%; background: var(--hue); box-shadow: 0 0 9px var(--hue); }
+  .pmeta .when { margin-left: auto; font-family: "Geist Mono"; font-size: 11px; color: var(--ink-faint); }
+
+  .ocr { font-size: 12.5px; line-height: 1.62; color: var(--ink-soft); }
+  .ocr .lab { font-family: "Geist Mono"; font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
+              color: var(--ink-faint); display: block; margin-bottom: 5px; }
+  .ocr mark { background: rgba(167,139,250,.18); color: var(--violet); border-radius: 4px; padding: 0 3px; font-weight: 600; }
+
+  .near { display: flex; gap: 6px; flex-wrap: wrap; }
+  .near .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--ink-dim);
+                background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; }
+  .near .chip .d { width: 6px; height: 6px; border-radius: 50%; }
+
+  /* footer action bar */
+  .foot { display: flex; align-items: center; justify-content: space-between; padding: 9px 16px;
+          border-top: 1px solid var(--line); background: var(--bg); }
+  .foot .brand { display: flex; align-items: center; gap: 9px; font-size: 12.5px; font-weight: 500; color: var(--ink-soft); }
+  .foot .brand .logo { width: 17px; height: 17px; border-radius: 5px; background: linear-gradient(140deg, var(--violet), var(--blue)); }
+  .foot .acts { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--ink-dim); }
+  .foot .acts .a { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 7px; cursor: pointer; }
+  .foot .acts .a:hover { background: rgba(255,255,255,.04); color: var(--ink-soft); }
+  .foot .acts .div { width: 1px; height: 15px; background: var(--line); margin: 0 3px; }
+  .key { font-family: "Geist Mono"; font-size: 10.5px; color: var(--ink-soft); background: var(--raise);
+         border: 1px solid var(--line); border-radius: 5px; min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 4px; }
+
+  @keyframes rise  { from { opacity: 0; transform: translateY(12px) scale(.99); } to { opacity: 1; transform: none; } }
+  @keyframes row   { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes blink { 0%,50% { opacity: 1; } 50.01%,100% { opacity: 0; } }
+  .row:nth-child(3){animation-delay:.05s}.row:nth-child(4){animation-delay:.09s}.row:nth-child(5){animation-delay:.13s}
+  .row:nth-child(7){animation-delay:.19s}.row:nth-child(8){animation-delay:.23s}
+</style>
+</head>
+<body>
+  <div class="palette">
+    <div class="bar">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      <div class="input"><span class="typed" id="typed"></span><span class="cur"></span></div>
+      <div class="seg"><button class="on">Ricerca</button><button>Chiedi</button><button>Cronologia</button></div>
+    </div>
+    <div class="sep"></div>
+
+    <div class="body">
+      <!-- list -->
+      <div class="listwrap" id="listwrap">
+        <div class="hl" id="hl"></div>
+
+        <div class="group">Oggi</div>
+
+        <div class="row" data-acc="var(--pink)" data-app="Figma" data-when="Oggi · 14:32" data-shot="mockup-overlay.fig"
+             data-ocr="Frame: barra <mark>ricerca</mark> espansa. Pannello anteprima a destra con cattura, OCR e metadati. Note sul playhead e sulla densità."
+             style="--hue:var(--pink)">
+          <div class="ava">F<span class="kind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/></svg></span></div>
+          <div class="mid"><div class="ttl">Figma <span class="sub">Mockup overlay</span> <span class="pin">★</span></div>
+            <div class="prev">barra <mark>ricerca</mark> espansa · token, selezione, anteprima</div></div>
+          <div class="right"><span class="time">14:32</span><span class="tags"><span class="tag">ui</span></span></div>
+        </div>
+
+        <div class="row" data-acc="var(--green)" data-app="Slack" data-when="Oggi · 11:08" data-shot="#design"
+             data-ocr="“…portiamo il <mark>design</mark> alla qualità Raycast anche nell'app, con pannello anteprima e azioni rapide.”"
+             style="--hue:var(--green)">
+          <div class="ava">S<span class="kind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span></div>
+          <div class="mid"><div class="ttl">Slack <span class="sub">#design</span></div>
+            <div class="prev">“…portiamo il <mark>design</mark> alla qualità Raycast anche nell'app”</div></div>
+          <div class="right"><span class="time">11:08</span></div>
+        </div>
+
+        <div class="row" data-acc="var(--amber)" data-app="Zoom" data-when="Oggi · 10:15" data-shot="audio · 42:10"
+             data-ocr="Trascrizione: «la metafora del <mark>design</mark> è la cronologia; l'utente scorre i ricordi col tasto freccia». — min 18"
+             style="--hue:var(--amber)">
+          <div class="ava">Z<span class="kind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M7 8v8M17 8v8M3 11v2M21 11v2"/></svg></span></div>
+          <div class="mid"><div class="ttl">Zoom <span class="sub">audio · trascritto</span></div>
+            <div class="prev">riunione <mark>design</mark> — decisione al minuto 18 (42 min)</div></div>
+          <div class="right"><span class="time">10:15</span><span class="tags"><span class="tag">call</span></span></div>
+        </div>
+
+        <div class="group">Ieri</div>
+
+        <div class="row" data-acc="var(--blue)" data-app="Mail" data-when="Ieri · 16:00" data-shot="Re: revisione"
+             data-ocr="Allegato: feedback sulla revisione <mark>design</mark>. Tre note sul contrasto, una sulla densità delle righe."
+             style="--hue:var(--blue)">
+          <div class="ava">M<span class="kind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg></span></div>
+          <div class="mid"><div class="ttl">Mail <span class="sub">da Giulia</span></div>
+            <div class="prev">Re: revisione <mark>design</mark> — feedback in allegato</div></div>
+          <div class="right"><span class="time">16:00</span></div>
+        </div>
+
+        <div class="row" data-acc="var(--teal)" data-app="VS Code" data-when="Ieri · 15:12" data-shot="ui/window.py"
+             data-ocr="Sessione refactor: estrazione token in ui/theme.py, rimozione dei 190 stili inline da <mark>window</mark>.py."
+             style="--hue:var(--teal)">
+          <div class="ava">C<span class="kind"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3"/></svg></span></div>
+          <div class="mid"><div class="ttl">VS Code <span class="sub">ui/window.py</span></div>
+            <div class="prev">refactor <mark>design</mark> tokens → ui/theme.py</div></div>
+          <div class="right"><span class="time">15:12</span><span class="tags"><span class="tag">code</span></span></div>
+        </div>
+      </div>
+
+      <!-- preview pane -->
+      <div class="pane" id="pane" style="--hue:var(--pink)">
+        <div class="cap">
+          <div class="chrome"><i></i><i></i><i></i><span id="p-shot">mockup-overlay.fig</span></div>
+          <div class="shot"><b class="s1"></b><b class="s2 hi"></b><b class="s3"></b><b class="s2"></b><b class="s1 hi"></b></div>
+        </div>
+        <div class="pmeta"><span class="src"><span class="d"></span><span id="p-app">Figma</span></span>
+          <span class="when" id="p-when">Oggi · 14:32</span></div>
+        <div class="ocr"><span class="lab">Testo riconosciuto</span><span id="p-ocr">Frame: barra <mark>ricerca</mark> espansa…</span></div>
+        <div>
+          <span class="lab" style="font-family:'Geist Mono';font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);display:block;margin-bottom:6px">Intorno ±5 min</span>
+          <div class="near">
+            <span class="chip"><span class="d" style="background:var(--emerald)"></span>screenshot 14:31</span>
+            <span class="chip"><span class="d" style="background:var(--amber)"></span>audio 14:30</span>
+            <span class="chip"><span class="d" style="background:var(--blue)"></span>Chrome 14:33</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="brand"><span class="logo"></span>Déjà</div>
+      <div class="acts">
+        <span class="a">Apri <span class="key">↵</span></span>
+        <span class="a">Chiedi AI <span class="key">⌘</span><span class="key">↵</span></span>
+        <span class="div"></span>
+        <span class="a">Azioni <span class="key">⌘</span><span class="key">K</span></span>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const target = "design", el = document.getElementById("typed");
+  let i = 0;
+  (function type(){ if (i <= target.length){ el.textContent = target.slice(0,i++); setTimeout(type, 130);} })();
+
+  const rows = [...document.querySelectorAll(".row")];
+  const hl = document.getElementById("hl");
+  const pane = document.getElementById("pane");
+  const listwrap = document.getElementById("listwrap");
+  let sel = 0;
+
+  function render(r){
+    const acc = r.dataset.acc, hue = getComputedStyle(r).getPropertyValue("--hue");
+    hl.style.setProperty("--accent", acc);
+    pane.style.setProperty("--hue", hue);
+    document.getElementById("p-app").textContent = r.dataset.app;
+    document.getElementById("p-when").textContent = r.dataset.when;
+    document.getElementById("p-shot").textContent = r.dataset.shot;
+    document.getElementById("p-ocr").innerHTML = r.dataset.ocr;
+    pane.animate([{opacity:.4},{opacity:1}], {duration:240, easing:"ease"});
+  }
+  function moveHl(r){ hl.style.top = r.offsetTop + "px"; hl.style.height = r.offsetHeight + "px"; }
+  function setSel(n){ sel = (n + rows.length) % rows.length; const r = rows[sel];
+    moveHl(r); render(r); r.scrollIntoView({block:"nearest"}); }
+
+  rows.forEach((r,n) => r.addEventListener("mousemove", () => { if (sel!==n) setSel(n); }));
+  addEventListener("keydown", e => {
+    if (e.key === "ArrowDown"){ e.preventDefault(); setSel(sel+1); }
+    if (e.key === "ArrowUp"){ e.preventDefault(); setSel(sel-1); }
+  });
+  document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll(".seg button").forEach(x => x.classList.remove("on")); b.classList.add("on");
+  }));
+  // init
+  requestAnimationFrame(() => setSel(0));
+</script>
+</body>
+</html>

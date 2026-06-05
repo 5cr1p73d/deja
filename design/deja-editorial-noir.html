@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Déjà — Editorial Noir</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,400&family=Hanken+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* ── Editorial Noir tokens ─────────────────────── */
+    --bg:        #141210;   /* warm near-black */
+    --bg-deep:   #0d0b09;   /* vignette floor */
+    --panel:     #1b1814;   /* overlay surface */
+    --panel-2:   #211d18;   /* raised row hover */
+    --ink:       #ece6da;   /* warm off-white */
+    --ink-soft:  #b3ab9d;   /* secondary */
+    --ink-faint: #6f685c;   /* tertiary / timestamps */
+    --gold:      #c8a45c;   /* the one accent */
+    --gold-lit:  #e6c98a;   /* highlight */
+    --gold-deep: #8a7038;
+    --line:      rgba(236, 230, 218, 0.09);
+    --line-gold: rgba(200, 164, 92, 0.30);
+    --radius:    18px;
+    --ease:      cubic-bezier(.22, .61, .36, 1);
+
+    /* muted category accents (kept for meaning, desaturated into noir) */
+    --c-figma:  #b98a6a;
+    --c-slack:  #9a8fb0;
+    --c-zoom:   #6f93a8;
+    --c-mail:   #a8896f;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    font-family: "Hanken Grotesk", sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(120% 90% at 50% -10%, #211c16 0%, var(--bg) 38%, var(--bg-deep) 100%);
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* film grain + drifting gold dust */
+  .grain, .dust { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+  .grain {
+    opacity: .045; mix-blend-mode: screen;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .dust canvas { width: 100%; height: 100%; display: block; }
+
+  /* ── Spotlight stack ───────────────────────────── */
+  .stage {
+    position: relative; z-index: 2;
+    width: min(660px, 92vw);
+    display: flex; flex-direction: column; gap: 14px;
+  }
+
+  /* the command bar */
+  .bar {
+    position: relative;
+    background: linear-gradient(180deg, var(--panel) 0%, #18150f 100%);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 26px 30px 22px;
+    box-shadow:
+      0 1px 0 rgba(236,230,218,.04) inset,
+      0 30px 80px -30px rgba(0,0,0,.85),
+      0 0 0 1px rgba(0,0,0,.4);
+    overflow: hidden;
+    animation: rise .7s var(--ease) both;
+  }
+  .bar::before {  /* top gold filament */
+    content: ""; position: absolute; left: 30px; right: 30px; top: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--gold) 30%, var(--gold-lit) 50%, var(--gold) 70%, transparent);
+    opacity: .5;
+  }
+  .bar::after {  /* breathing glow */
+    content: ""; position: absolute; inset: -40% -10% auto; height: 200px;
+    background: radial-gradient(60% 60% at 50% 0%, rgba(200,164,92,.10), transparent 70%);
+    animation: breathe 6s ease-in-out infinite;
+  }
+
+  .brandrow { display: flex; align-items: baseline; justify-content: space-between; }
+  .brand {
+    font-family: "Fraunces", serif;
+    font-optical-sizing: auto;
+    font-weight: 400;
+    font-size: 34px;
+    letter-spacing: -.01em;
+    line-height: 1;
+    color: var(--ink);
+  }
+  .brand .accent { color: var(--gold-lit); font-style: italic; }
+  .kbd {
+    font-size: 11.5px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--ink-faint); display: flex; align-items: center; gap: 8px;
+  }
+  .kbd b {
+    font-weight: 500; color: var(--ink-soft);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 3px 7px; letter-spacing: .05em;
+    background: rgba(236,230,218,.03);
+  }
+
+  .rule {
+    height: 1px; margin: 18px 0 16px;
+    background: linear-gradient(90deg, var(--line-gold), transparent 60%);
+  }
+
+  .inputrow { display: flex; align-items: center; gap: 14px; }
+  .caret-glyph {
+    font-family: "Fraunces", serif; font-size: 22px; color: var(--gold);
+    transform: translateY(-1px);
+  }
+  .field {
+    flex: 1; font-family: "Fraunces", serif; font-weight: 300;
+    font-size: 23px; color: var(--ink);
+    display: flex; align-items: center;
+  }
+  .field .typed { white-space: pre; }
+  .blink {
+    width: 2px; height: 26px; background: var(--gold-lit);
+    margin-left: 1px; animation: blink 1.05s steps(1) infinite;
+    box-shadow: 0 0 8px rgba(230,201,138,.6);
+  }
+  .placeholder { color: var(--ink-faint); font-style: italic; }
+
+  /* mode tabs */
+  .modes { display: flex; gap: 26px; margin-top: 20px; }
+  .mode {
+    background: none; border: none; cursor: pointer;
+    font-family: "Hanken Grotesk"; font-size: 12px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--ink-faint);
+    padding-bottom: 6px; position: relative; transition: color .3s var(--ease);
+  }
+  .mode:hover { color: var(--ink-soft); }
+  .mode.on { color: var(--gold-lit); }
+  .mode.on::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1.5px;
+    background: linear-gradient(90deg, var(--gold), var(--gold-lit));
+  }
+
+  /* ── results panel ─────────────────────────────── */
+  .panel {
+    background: linear-gradient(180deg, #1a1611 0%, #15120d 100%);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 10px 12px 14px;
+    box-shadow: 0 26px 70px -34px rgba(0,0,0,.8);
+    animation: rise .7s var(--ease) .08s both;
+  }
+  .bucket {
+    font-family: "Hanken Grotesk"; font-size: 10.5px; font-weight: 600;
+    letter-spacing: .22em; text-transform: uppercase; color: var(--gold-deep);
+    padding: 16px 18px 9px; display: flex; align-items: center; gap: 12px;
+  }
+  .bucket::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  .row {
+    display: grid; grid-template-columns: auto 132px 1fr auto;
+    align-items: center; gap: 16px;
+    padding: 12px 18px; border-radius: 12px;
+    cursor: pointer; position: relative;
+    transition: background .25s var(--ease), transform .25s var(--ease);
+    opacity: 0; animation: row .55s var(--ease) forwards;
+  }
+  .row::before {
+    content: ""; position: absolute; left: 6px; top: 18%; bottom: 18%; width: 2px;
+    background: var(--gold-lit); border-radius: 2px;
+    opacity: 0; transform: scaleY(.3); transition: all .25s var(--ease);
+  }
+  .row:hover { background: var(--panel-2); transform: translateX(2px); }
+  .row:hover::before { opacity: 1; transform: scaleY(1); }
+
+  .dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 10px -1px currentColor; }
+  .app { font-weight: 500; font-size: 14px; color: var(--ink); letter-spacing: .005em; }
+  .preview { font-size: 13.5px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview mark { background: none; color: var(--gold-lit); font-weight: 600; }
+  .preview em { font-style: italic; color: var(--ink); }
+  .time {
+    font-size: 12px; color: var(--ink-faint); font-variant-numeric: tabular-nums;
+    letter-spacing: .03em;
+  }
+
+  .footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 20px 6px; margin-top: 4px;
+    font-size: 11.5px; color: var(--ink-faint); letter-spacing: .04em;
+  }
+  .footer .meter { display: flex; gap: 3px; }
+  .footer .meter i { width: 14px; height: 3px; border-radius: 2px; background: var(--line); }
+  .footer .meter i.lit { background: var(--gold-deep); }
+
+  /* ── chat view ─────────────────────────────────── */
+  .chat { display: none; flex-direction: column; gap: 18px; padding: 22px 24px 16px; }
+  .chat.show { display: flex; }
+  .panel.search .results { display: block; }
+  .panel.search .chat { display: none; }
+  .panel.chat-mode .results { display: none; }
+  .panel.chat-mode .chat { display: flex; }
+
+  .turn { max-width: 86%; animation: row .5s var(--ease) both; }
+  .turn.user { align-self: flex-end; text-align: right; }
+  .turn .who {
+    font-size: 10px; letter-spacing: .2em; text-transform: uppercase;
+    color: var(--ink-faint); margin-bottom: 6px;
+  }
+  .turn.ai .who { color: var(--gold-deep); }
+  .bubble {
+    font-size: 14.5px; line-height: 1.6; color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 14px; padding: 13px 16px;
+  }
+  .turn.user .bubble { background: rgba(200,164,92,.07); border-color: var(--line-gold); }
+  .turn.ai .bubble {
+    font-family: "Fraunces", serif; font-weight: 300; font-size: 16px; line-height: 1.62;
+    background: linear-gradient(180deg, #1d1914, #1a1610);
+  }
+  .turn.ai .bubble .ref {
+    display: inline-flex; align-items: center; gap: 5px; vertical-align: middle;
+    font-family: "Hanken Grotesk"; font-size: 11px; color: var(--gold-lit);
+    border: 1px solid var(--line-gold); border-radius: 7px; padding: 1px 7px; margin: 0 2px;
+  }
+
+  /* hint line under everything */
+  .hint {
+    text-align: center; font-size: 11px; color: var(--ink-faint);
+    letter-spacing: .12em; text-transform: uppercase; margin-top: 4px;
+    animation: rise .7s var(--ease) .16s both;
+  }
+  .hint span { color: var(--gold-deep); }
+
+  /* ── keyframes ─────────────────────────────────── */
+  @keyframes rise   { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+  @keyframes row    { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes blink  { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+  @keyframes breathe{ 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+
+  .row:nth-child(2) { animation-delay: .12s; }
+  .row:nth-child(3) { animation-delay: .18s; }
+  .row:nth-child(5) { animation-delay: .26s; }
+  .row:nth-child(6) { animation-delay: .32s; }
+  .turn:nth-child(1){ animation-delay: .10s; }
+  .turn:nth-child(2){ animation-delay: .22s; }
+  .turn:nth-child(3){ animation-delay: .36s; }
+</style>
+</head>
+<body>
+  <div class="grain"></div>
+  <div class="dust"><canvas id="dust"></canvas></div>
+
+  <div class="stage">
+    <!-- command bar -->
+    <div class="bar">
+      <div class="brandrow">
+        <div class="brand">Déjà<span class="accent">.</span></div>
+        <div class="kbd"><b>Ctrl</b><b>⇧</b><b>D</b> · evoca</div>
+      </div>
+      <div class="rule"></div>
+      <div class="inputrow">
+        <span class="caret-glyph">❯</span>
+        <div class="field"><span class="typed" id="typed"></span><span class="blink"></span></div>
+      </div>
+      <div class="modes">
+        <button class="mode on" data-view="search">Ricerca</button>
+        <button class="mode" data-view="chat">Chiedi</button>
+        <button class="mode" data-view="search">Cronologia</button>
+      </div>
+    </div>
+
+    <!-- panel: search results + chat, toggled -->
+    <div class="panel search" id="panel">
+      <div class="results">
+        <div class="bucket">Oggi</div>
+
+        <div class="row" style="animation-delay:.06s">
+          <span class="dot" style="color:var(--c-figma)"></span>
+          <span class="app">Figma</span>
+          <span class="preview">Mockup overlay — <em>componente</em> barra <mark>ricerca</mark> espansa</span>
+          <span class="time">14:32</span>
+        </div>
+        <div class="row">
+          <span class="dot" style="color:var(--c-slack)"></span>
+          <span class="app">Slack</span>
+          <span class="preview">“…portiamo il <mark>design</mark> editoriale anche nell'app”</span>
+          <span class="time">11:08</span>
+        </div>
+        <div class="row">
+          <span class="dot" style="color:var(--c-mail)"></span>
+          <span class="app">Mail</span>
+          <span class="preview">Re: revisione <mark>design</mark> — feedback allegato</span>
+          <span class="time">09:41</span>
+        </div>
+
+        <div class="bucket">Ieri</div>
+
+        <div class="row">
+          <span class="dot" style="color:var(--c-zoom)"></span>
+          <span class="app">Zoom</span>
+          <span class="preview">Riunione <mark>design</mark> di ieri — note &amp; trascrizione audio</span>
+          <span class="time">16:00</span>
+        </div>
+        <div class="row">
+          <span class="dot" style="color:var(--c-figma)"></span>
+          <span class="app">Figma</span>
+          <span class="preview">Palette Editorial Noir · token oro <mark>#c8a45c</mark></span>
+          <span class="time">15:12</span>
+        </div>
+
+        <div class="footer">
+          <span>5 ricordi · 38 ms</span>
+          <span class="meter"><i class="lit"></i><i class="lit"></i><i class="lit"></i><i></i><i></i></span>
+        </div>
+      </div>
+
+      <!-- chat view -->
+      <div class="chat">
+        <div class="turn user">
+          <div class="who">Tu</div>
+          <div class="bubble">Cosa abbiamo deciso ieri sul design dell'overlay?</div>
+        </div>
+        <div class="turn ai">
+          <div class="who">Déjà</div>
+          <div class="bubble">Nella riunione di ieri avete scelto una direzione <em>editoriale</em>: serif espressivo, un solo accento oro, molta aria.
+          La decisione è registrata qui<span class="ref">◷ Zoom 16:00</span> e ripresa nel mockup<span class="ref">▦ Figma 14:32</span>.</div>
+        </div>
+        <div class="turn user">
+          <div class="who">Tu</div>
+          <div class="bubble">Perfetto. Mostrami il token del colore.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hint">premi <span>↵</span> per aprire · <span>Tab</span> per cambiare modo · <span>Esc</span> per chiudere</div>
+  </div>
+
+<script>
+  /* typewriter for the query */
+  const target = "riunione design di ieri";
+  const el = document.getElementById("typed");
+  let i = 0;
+  (function type() {
+    if (i <= target.length) { el.textContent = target.slice(0, i++); setTimeout(type, 55 + Math.random() * 55); }
+  })();
+
+  /* mode toggle search <-> chat */
+  const panel = document.getElementById("panel");
+  document.querySelectorAll(".mode").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".mode").forEach(b => b.classList.remove("on"));
+      btn.classList.add("on");
+      const chat = btn.dataset.view === "chat";
+      panel.classList.toggle("chat-mode", chat);
+      panel.classList.toggle("search", !chat);
+    });
+  });
+
+  /* drifting gold dust */
+  const cv = document.getElementById("dust"), ctx = cv.getContext("2d");
+  let W, H, motes;
+  function init() {
+    W = cv.width = innerWidth; H = cv.height = innerHeight;
+    motes = Array.from({ length: 46 }, () => ({
+      x: Math.random() * W, y: Math.random() * H,
+      r: Math.random() * 1.5 + .4,
+      vx: (Math.random() - .5) * .14, vy: (Math.random() - .5) * .14,
+      a: Math.random() * .4 + .08
+    }));
+  }
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    for (const m of motes) {
+      m.x += m.vx; m.y += m.vy;
+      if (m.x < 0) m.x = W; if (m.x > W) m.x = 0;
+      if (m.y < 0) m.y = H; if (m.y > H) m.y = 0;
+      ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, 6.283);
+      ctx.fillStyle = `rgba(200,164,92,${m.a})`; ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  }
+  init(); draw(); addEventListener("resize", init);
+</script>
+</body>
+</html>

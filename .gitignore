@@ -39,3 +39,4 @@ obsidian/
 # ── File di debug / audio personali ──
 *.wav
 debug_audio.wav
+graphify-out/
