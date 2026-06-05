@@ -196,6 +196,24 @@ def _decode_thumb(blob):
     return None
 
 
+def _rounded_pixmap(src, radius=12):
+    """Ritorna una copia con angoli arrotondati + hairline (look 'card')."""
+    try:
+        if src is None or src.isNull():
+            return src
+        out = QPixmap(src.size()); out.fill(Qt.GlobalColor.transparent)
+        p = QPainter(out); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(out.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath(); path.addRoundedRect(rect, radius, radius)
+        p.setClipPath(path); p.drawPixmap(0, 0, src)
+        p.setClipping(False); p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1.0)); p.drawPath(path)
+        p.end()
+        return out
+    except Exception:
+        return src
+
+
 def _date_bucket_label(ts_iso):
     """Ritorna bucket label e ordinamento (oggi/ieri/settimana/data)."""
     try:
@@ -3638,9 +3656,9 @@ class DejaWindow(QWidget):
         pv_layout = QVBoxLayout(self._preview_panel); pv_layout.setContentsMargins(16, 12, 16, 16); pv_layout.setSpacing(12)
 
         self.preview_info = QLabel(); self.preview_info.setFixedHeight(18)
-        self.preview_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_info.setFont(QFont(UI_FONT, 10, QFont.Weight.Medium))
-        self.preview_info.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; letter-spacing:0.5px;")
+        self.preview_info.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.preview_info.setFont(QFont(MONO_FONT, 10, QFont.Weight.Medium))
+        self.preview_info.setStyleSheet(f"color:{INK_DIM}; background:transparent; letter-spacing:0.5px;")
         pv_layout.addWidget(self.preview_info)
 
         top_br = QHBoxLayout(); top_br.setSpacing(10)
@@ -4356,7 +4374,8 @@ class DejaWindow(QWidget):
             if not audio_blob: self.play_btn.setEnabled(False); self.play_btn.setStyleSheet(SS_BTN_OFF)
         else:
             self._current_type = "screenshot"; self._current_audio = None
-            self.preview_lbl.setWordWrap(False); self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.preview_lbl.setWordWrap(False)
+            self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
             self.preview_lbl.setStyleSheet("background:transparent;")
             self.audio_player_bar.hide()
 
@@ -4367,8 +4386,12 @@ class DejaWindow(QWidget):
             if row_db and row_db[0]:
                 px = QPixmap(); px.loadFromData(row_db[0])
                 self._current_pixmap = px
+                # Riempi la larghezza del pannello e ancora in alto: niente più
+                # immagine piccola che galleggia in un vuoto (look "card").
                 target_w = self.preview_lbl.width() or 560
-                self.preview_lbl.setPixmap(px.scaled(target_w, 500, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                scaled = px.scaled(target_w, 720, Qt.AspectRatioMode.KeepAspectRatio,
+                                   Qt.TransformationMode.SmoothTransformation)
+                self.preview_lbl.setPixmap(_rounded_pixmap(scaled, 12))
                 self._preview_panel.set_border_kind("screenshot"); self._set_action_btns("screenshot")
             else:
                 self._current_pixmap = None; self.preview_lbl.setText(t("win.st_image_unavail"))
