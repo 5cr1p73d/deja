@@ -129,7 +129,6 @@ def main():
     # il browser lancia `deja.exe --web-host`). In dev si usa python sul file.
     if "--web-host" in sys.argv:
         import runpy
-        import paths
         runpy.run_path(
             paths.resource_path(os.path.join("extension", "host", "web_host.py")),
             run_name="__main__",
