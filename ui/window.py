@@ -1593,7 +1593,7 @@ class _SelHighlight(QWidget):
 
 # ── Card Delegate (Sleek Modern Items) ─────────────────────────────
 class MinimalItemDelegate(QStyledItemDelegate):
-    CARD_H = 78
+    CARD_H = 70
     TITLE_H = 18.0
     SUB_H = 14.0
 
@@ -1641,7 +1641,7 @@ class MinimalItemDelegate(QStyledItemDelegate):
 
         # 2. Media box — MINIATURA reale della cattura (screenshot) o waveform (audio).
         #    È ciò che rende la lista "memoria visiva" invece di una rubrica.
-        MW, MH = 46.0, 32.0
+        MW, MH = 52.0, 36.0
         media = QRectF(rect.left() + 12, rect.center().y() - MH / 2, MW, MH)
         mpath = QPainterPath(); mpath.addRoundedRect(media, 8, 8)
 
