@@ -59,7 +59,13 @@ row("VS Code", "1g fa", "82%", "screenshot")
 row("note vocali sul refactor dei token e…", "1g fa", "91%", "audio")
 
 lw.setCurrentRow(1)  # mostra selezione
+hl = W._SelHighlight(lw.viewport())
 lw.show()
+app.processEvents()
+# posiziona l'evidenziatore animato sulla riga corrente (Refined II)
+it = lw.currentItem()
+from PyQt6.QtCore import QRect
+hl.move_to(QRect(lw.visualItemRect(it)), animate=False)
 app.processEvents()
 out = os.path.join(os.path.dirname(__file__), "_rows.png")
 lw.grab().save(out)

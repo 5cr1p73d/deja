@@ -1483,6 +1483,44 @@ class SettingsDialog(FramelessDialog):
             pass
 
 
+class _SelHighlight(QWidget):
+    """Evidenziatore di selezione animato per la results list (Refined II).
+
+    Vive sopra il viewport della lista: fill traslucido + barra viola a sinistra.
+    Scorre da una riga all'altra con QPropertyAnimation invece di saltare —
+    il feel "selezione che scivola" di Raycast. Trasparente al mouse: i click
+    passano alla lista sotto.
+    """
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.hide()
+        self._anim = None
+
+    def paintEvent(self, _):
+        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(6, 3, -6, -3)
+        path = QPainterPath(); path.addRoundedRect(r, 10, 10)
+        p.fillPath(path, QColor(255, 255, 255, 16))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1.0)); p.drawPath(path)
+        vr, vg, vb = C_AI_RGB
+        bar = QPainterPath()
+        bar.addRoundedRect(QRectF(r.left() + 2, r.top() + 11, 2.5, r.height() - 22), 1.5, 1.5)
+        p.fillPath(bar, QColor(vr, vg, vb, 255))
+
+    def move_to(self, rect, animate=True):
+        if rect is None or not rect.isValid() or rect.height() <= 0:
+            self.hide(); return
+        if self.isHidden() or not animate:
+            self.setGeometry(rect); self.show(); self.raise_(); return
+        self._anim = QPropertyAnimation(self, b"geometry", self)
+        self._anim.setDuration(180); self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.setStartValue(self.geometry()); self._anim.setEndValue(rect)
+        self._anim.start()
+        self.raise_()
+
+
 # ── Card Delegate (Sleek Modern Items) ─────────────────────────────
 class MinimalItemDelegate(QStyledItemDelegate):
     CARD_H = 78
@@ -1499,10 +1537,12 @@ class MinimalItemDelegate(QStyledItemDelegate):
         if index.data(ITEM_HEADER_ROLE):
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            rect = QRectF(option.rect).adjusted(8, 6, -8, -2)
-            text = index.data(Qt.ItemDataRole.DisplayRole) or ""
-            painter.setPen(QColor(TEXT_SECONDARY))
-            painter.setFont(QFont(UI_FONT, 8, QFont.Weight.Bold))
+            rect = QRectF(option.rect).adjusted(12, 6, -12, -2)
+            text = (index.data(Qt.ItemDataRole.DisplayRole) or "").upper()
+            painter.setPen(QColor(INK_FAINT))
+            hf = QFont(MONO_FONT, 8, QFont.Weight.Medium)
+            hf.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 112)
+            painter.setFont(hf)
             painter.drawText(rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
             # Linea sottile sotto label
             painter.setPen(QPen(QColor(255, 255, 255, 12), 1.0))
@@ -1524,18 +1564,9 @@ class MinimalItemDelegate(QStyledItemDelegate):
         VR, VG, VB = C_AI_RGB                       # viola = accento unico
         cat_r, cat_g, cat_b = C_AUDIO_RGB if is_audio else C_SS_RGB  # tinta tipo (badge)
 
-        # 1. Background — selezione/hover sobri (Raycast), niente colore di categoria
-        if is_sel:
-            painter.fillPath(path, QColor(255, 255, 255, 16))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor(255, 255, 255, 30), 1.0))
-            painter.drawPath(path)
-            # barra accento viola a sinistra
-            bar = QPainterPath()
-            bar.addRoundedRect(QRectF(rect.left() + 2, rect.top() + 11,
-                                      2.5, rect.height() - 22), 1.5, 1.5)
-            painter.fillPath(bar, QColor(VR, VG, VB, 255))
-        elif is_hov:
+        # 1. Background — solo hover qui. La SELEZIONE è disegnata da _SelHighlight
+        #    (overlay animato sopra il viewport) per lo scorrimento fluido stile Raycast.
+        if is_hov and not is_sel:
             painter.fillPath(path, QColor(255, 255, 255, 8))
 
         # 2. Avatar squircle (rounded-rect) — colore app, iniziale scura
@@ -3397,9 +3428,9 @@ class DejaWindow(QWidget):
         self._search_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         popup = self._search_completer.popup()
         popup.setStyleSheet(
-            "background:#1a1a1f; color:#f3f4f6; border:1px solid rgba(255,255,255,0.10); "
-            "border-radius:8px; padding:4px; font-size:11px;"
-            " selection-background-color: rgba(167,139,250,0.30);"
+            f"background:{theme.SURFACE}; color:{INK}; border:1px solid {theme.LINE_STRONG}; "
+            f"border-radius:8px; padding:4px; font-family:'{theme.SANS}'; font-size:11px;"
+            f" selection-background-color: rgba(167,139,250,0.30);"
         )
         self.search_input.setCompleter(self._search_completer)
         self._refresh_search_completer()
@@ -3578,7 +3609,9 @@ class DejaWindow(QWidget):
         self.results_list.setMouseTracking(True)
         self.results_list.setStyleSheet(theme.results_list())
         self.results_list.setItemDelegate(MinimalItemDelegate(self.results_list))
+        self._sel_hl = _SelHighlight(self.results_list.viewport())
         self.results_list.currentRowChanged.connect(self._on_row_changed)
+        self.results_list.currentRowChanged.connect(lambda _r: self._move_sel_highlight(True))
         self.results_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.results_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.results_list.customContextMenuRequested.connect(self._on_results_context_menu)
@@ -3624,11 +3657,7 @@ class DejaWindow(QWidget):
         self.tag_input = QLineEdit()
         self.tag_input.setPlaceholderText(t("win.det_tag_ph"))
         self.tag_input.setFixedHeight(28)
-        self.tag_input.setStyleSheet(
-            "QLineEdit{background:rgba(255,255,255,0.03); color:#e5e7eb; "
-            f"border:1px solid {BORDER_STR}; border-radius:7px; padding:0 10px; font-size:10pt;}}"
-            f"QLineEdit:focus{{border:1px solid rgba(167,139,250,0.4);}}"
-        )
+        self.tag_input.setStyleSheet(theme.tag_input())
         self.tag_input.returnPressed.connect(self._on_add_tag)
         self.tag_input.setEnabled(False)
         tag_row.addWidget(self.tag_input)
@@ -4008,6 +4037,8 @@ class DejaWindow(QWidget):
 
     def _on_results_scroll(self, value):
         """Scroll-infinito: vicino al fondo, carica la pagina successiva."""
+        # tieni l'evidenziatore di selezione agganciato alla riga durante lo scroll
+        self._move_sel_highlight(animate=False)
         if not getattr(self, "_all_mode", False) or not getattr(self, "_all_paginable", False):
             return
         if self._active_date != "all" or getattr(self, "_all_page_loading", False):
@@ -4133,6 +4164,21 @@ class DejaWindow(QWidget):
             anim.finished.connect(lambda: self.results_list.setGraphicsEffect(None))
             anim.start()
             self._results_fade = anim  # ref per non farlo GC-are
+        except Exception:
+            pass
+        # nuova lista → la selezione si resetta: nascondi l'evidenziatore
+        try:
+            self._sel_hl.hide()
+        except Exception:
+            pass
+
+    def _move_sel_highlight(self, animate=True):
+        """Posiziona/anima l'evidenziatore di selezione sulla riga corrente."""
+        try:
+            it = self.results_list.currentItem()
+            if it is None or it.data(ITEM_HEADER_ROLE):
+                self._sel_hl.hide(); return
+            self._sel_hl.move_to(QRect(self.results_list.visualItemRect(it)), animate)
         except Exception:
             pass
 
