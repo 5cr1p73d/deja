@@ -461,6 +461,22 @@ SETTINGS_QSS = """
         selection-background-color:rgba(167,139,250,0.22);
     }
 
+    QSpinBox::up-button, QSpinBox::down-button {
+        subcontrol-origin:border; width:20px; border:none; background:transparent;
+    }
+    QSpinBox::up-button { subcontrol-position:top right; }
+    QSpinBox::down-button { subcontrol-position:bottom right; }
+    QSpinBox::up-arrow {
+        width:0; height:0; border-left:4px solid transparent; border-right:4px solid transparent;
+        border-bottom:5px solid #9a9aa6;
+    }
+    QSpinBox::down-arrow {
+        width:0; height:0; border-left:4px solid transparent; border-right:4px solid transparent;
+        border-top:5px solid #9a9aa6;
+    }
+    QSpinBox::up-arrow:hover { border-bottom:5px solid #bcabff; }
+    QSpinBox::down-arrow:hover { border-top:5px solid #bcabff; }
+
     QListWidget#nav {
         background:#131318; border:none; outline:none;
         border-right:1px solid rgba(255,255,255,0.06);
