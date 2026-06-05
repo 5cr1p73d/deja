@@ -173,6 +173,38 @@ SS_SLIDER_AUDIO = f"""
 
 ITEM_TYPE_ROLE = Qt.ItemDataRole.UserRole + 1
 ITEM_HEADER_ROLE = Qt.ItemDataRole.UserRole + 2
+ITEM_THUMB_ROLE = Qt.ItemDataRole.UserRole + 3   # QPixmap miniatura screenshot
+
+# Cache miniature screenshot per id (decodifica costosa: fatta una volta).
+_THUMB_CACHE = {}
+_THUMB_PX = 96  # lato sorgente cache (downscale netto nel delegate)
+
+
+def _load_thumb(shot_id):
+    """Miniatura QPixmap della cattura `shot_id` (o None). Cache per id."""
+    if shot_id in _THUMB_CACHE:
+        return _THUMB_CACHE[shot_id]
+    pm = None
+    try:
+        conn = get_conn()
+        row = conn.cursor().execute(
+            "SELECT image FROM screenshots WHERE id=?", (shot_id,)
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            src = QPixmap()
+            if src.loadFromData(bytes(row[0])) and not src.isNull():
+                # scala "cover" a un quadrato cache, poi il delegate ritaglia
+                pm = src.scaled(_THUMB_PX, _THUMB_PX,
+                                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                Qt.TransformationMode.SmoothTransformation)
+    except Exception:
+        pm = None
+    if len(_THUMB_CACHE) > 400:
+        _THUMB_CACHE.clear()
+    _THUMB_CACHE[shot_id] = pm
+    return pm
+
 
 def _date_bucket_label(ts_iso):
     """Ritorna bucket label e ordinamento (oggi/ieri/settimana/data)."""
@@ -1569,60 +1601,53 @@ class MinimalItemDelegate(QStyledItemDelegate):
         if is_hov and not is_sel:
             painter.fillPath(path, QColor(255, 255, 255, 8))
 
-        # 2. Avatar squircle (rounded-rect) — colore app, iniziale scura
-        AV = 30.0
-        ax = rect.left() + 12
-        ay = rect.center().y() - AV / 2
-        av_rect = QRectF(ax, ay, AV, AV)
-        av_path = QPainterPath(); av_path.addRoundedRect(av_rect, 8, 8)
+        # 2. Media box — MINIATURA reale della cattura (screenshot) o waveform (audio).
+        #    È ciò che rende la lista "memoria visiva" invece di una rubrica.
+        MW, MH = 46.0, 32.0
+        media = QRectF(rect.left() + 12, rect.center().y() - MH / 2, MW, MH)
+        mpath = QPainterPath(); mpath.addRoundedRect(media, 8, 8)
 
         display_full = index.data(Qt.ItemDataRole.DisplayRole) or ""
         first_line = display_full.split("\n", 1)[0] if display_full else ""
+        thumb = index.data(ITEM_THUMB_ROLE)
 
         if is_audio:
-            base = QColor(cat_r, cat_g, cat_b)
-        else:
-            app_r, app_g, app_b = _app_color_rgb(first_line)
-            base = QColor(app_r, app_g, app_b)
-        # fill leggermente smorzato per non gridare
-        fill = QColor(base); fill.setAlpha(235 if is_sel else 205)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.fillPath(av_path, fill)
-        # inner highlight ring
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(255, 255, 255, 36), 1.0))
-        painter.drawPath(av_path)
-
-        if is_audio:
-            # waveform scuro dentro lo squircle
-            painter.setPen(QPen(QColor(14, 14, 18, 235), 1.7,
-                                cap=Qt.PenCapStyle.RoundCap))
-            hs = [4, 8, 12, 8, 4]; gi = 4.0
-            cx = av_rect.center().x(); cy = av_rect.center().y()
+            fill = QColor(cat_r, cat_g, cat_b); fill.setAlpha(70 if is_sel else 48)
+            painter.setPen(Qt.PenStyle.NoPen); painter.fillPath(mpath, fill)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(cat_r, cat_g, cat_b, 90), 1.0)); painter.drawPath(mpath)
+            painter.setPen(QPen(QColor(cat_r, cat_g, cat_b, 255), 1.8, cap=Qt.PenCapStyle.RoundCap))
+            hs = [5, 10, 15, 9, 13, 7, 4]; gi = 4.6
+            cx = media.center().x(); cy = media.center().y()
             sx = cx - (len(hs) - 1) * gi / 2
             for i, bh in enumerate(hs):
-                bx = sx + i * gi
-                painter.drawLine(QPointF(bx, cy - bh / 2), QPointF(bx, cy + bh / 2))
-        else:
-            initial = _app_initial(first_line)
-            painter.setPen(QColor(14, 14, 18, 240))
-            painter.setFont(QFont(UI_FONT, 12, QFont.Weight.Bold))
-            painter.drawText(av_rect, Qt.AlignmentFlag.AlignCenter, initial)
-
-        # 3. Badge tipo (cerchietto in basso a destra dell'avatar)
-        bcx = av_rect.right() - 2; bcy = av_rect.bottom() - 2
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(14, 14, 18))
-        painter.drawEllipse(QPointF(bcx, bcy), 7.0, 7.0)
-        gcol = QColor(cat_r, cat_g, cat_b, 255)
-        if is_audio:
-            painter.setPen(QPen(gcol, 1.3, cap=Qt.PenCapStyle.RoundCap))
-            for dx, hh in ((-2.0, 3.0), (0.0, 5.0), (2.0, 3.0)):
-                painter.drawLine(QPointF(bcx + dx, bcy - hh / 2), QPointF(bcx + dx, bcy + hh / 2))
-        else:
+                painter.drawLine(QPointF(sx + i * gi, cy - bh / 2), QPointF(sx + i * gi, cy + bh / 2))
+        elif isinstance(thumb, QPixmap) and not thumb.isNull():
+            painter.save(); painter.setClipPath(mpath)
+            sc = thumb.scaled(int(MW), int(MH), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                              Qt.TransformationMode.SmoothTransformation)
+            painter.drawPixmap(QPointF(media.left() - (sc.width() - MW) / 2,
+                                       media.top() - (sc.height() - MH) / 2), sc)
+            painter.restore()
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(gcol, 1.2, join=Qt.PenJoinStyle.RoundJoin))
-            painter.drawRoundedRect(QRectF(bcx - 3.0, bcy - 2.4, 6.0, 4.8), 1.0, 1.0)
+            painter.setPen(QPen(QColor(255, 255, 255, 40 if not is_sel else 70), 1.0))
+            painter.drawPath(mpath)
+            # pallino colore-app nell'angolo (identifica la sorgente)
+            ar, ag, ab = _app_color_rgb(first_line)
+            dcx, dcy = media.right() - 7, media.bottom() - 7
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(14, 14, 18, 235)); painter.drawEllipse(QPointF(dcx, dcy), 5.4, 5.4)
+            painter.setBrush(QColor(ar, ag, ab)); painter.drawEllipse(QPointF(dcx, dcy), 3.0, 3.0)
+        else:
+            # fallback (nessuna miniatura): fill colore app + iniziale
+            ar, ag, ab = _app_color_rgb(first_line)
+            fill = QColor(ar, ag, ab); fill.setAlpha(220 if is_sel else 195)
+            painter.setPen(Qt.PenStyle.NoPen); painter.fillPath(mpath, fill)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(255, 255, 255, 36), 1.0)); painter.drawPath(mpath)
+            painter.setPen(QColor(14, 14, 18, 240))
+            painter.setFont(QFont(UI_FONT, 13, QFont.Weight.Bold))
+            painter.drawText(media, Qt.AlignmentFlag.AlignCenter, _app_initial(first_line))
 
         # 4. Testo — titolo + sotto-riga; score a destra in mono
         display = index.data(Qt.ItemDataRole.DisplayRole) or ""
@@ -1633,7 +1658,7 @@ class MinimalItemDelegate(QStyledItemDelegate):
             left, right = sub_txt.split("•", 1)
             sub_txt = left.strip(); score_txt = right.strip()
 
-        tx = av_rect.right() + 13
+        tx = media.right() + 14
         score_w = 56.0
         tw = rect.right() - 14 - score_w - tx
         content_h = self.TITLE_H + self.SUB_H
@@ -4148,6 +4173,8 @@ class DejaWindow(QWidget):
             tag = "✓ esatto" if r.get("exact") else f"{int(r['score'] * 100)}%"
             item = QListWidgetItem(f"{title}\n{ts_rel}   •   {tag}")
             item.setData(Qt.ItemDataRole.UserRole, i); item.setData(ITEM_TYPE_ROLE, "audio" if is_audio else "screenshot")
+            if not is_audio and r.get("id") is not None:
+                item.setData(ITEM_THUMB_ROLE, _load_thumb(r.get("id")))
             self.results_list.addItem(item)
         # Aggiorna count badges
         self._update_filter_pill_counts()
