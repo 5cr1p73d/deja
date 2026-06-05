@@ -3743,20 +3743,21 @@ class DejaWindow(QWidget):
 
     # ── Helpers ─────────────────────────────────────────────────────
     def _set_action_btns(self, kind="neutral"):
+        _act = theme.btn_action(False); _pri = theme.btn_action(True)
         if kind == "audio":
-            self.fs_btn.setEnabled(False); self.fs_btn.setStyleSheet(SS_BTN_OFF)
-            self.play_btn.setEnabled(True); self.play_btn.setStyleSheet(SS_BTN_AUDIO_ON)
-            self.ctx_btn.setEnabled(True); self.ctx_btn.setStyleSheet(SS_BTN_AI_ON)
+            self.fs_btn.setEnabled(False); self.fs_btn.setStyleSheet(_act)
+            self.play_btn.setEnabled(True); self.play_btn.setStyleSheet(_pri)   # azione principale
+            self.ctx_btn.setEnabled(True); self.ctx_btn.setStyleSheet(_act)
         elif kind == "screenshot":
-            self.fs_btn.setEnabled(True); self.fs_btn.setStyleSheet(SS_BTN_SS_ON)
-            self.play_btn.setEnabled(False); self.play_btn.setStyleSheet(SS_BTN_OFF)
-            self.ctx_btn.setEnabled(True); self.ctx_btn.setStyleSheet(SS_BTN_AI_ON)
+            self.fs_btn.setEnabled(True); self.fs_btn.setStyleSheet(_pri)       # azione principale
+            self.play_btn.setEnabled(False); self.play_btn.setStyleSheet(_act)
+            self.ctx_btn.setEnabled(True); self.ctx_btn.setStyleSheet(_act)
         else:
-            self.fs_btn.setEnabled(False); self.fs_btn.setStyleSheet(SS_BTN_OFF)
-            self.play_btn.setEnabled(False); self.play_btn.setStyleSheet(SS_BTN_OFF)
-            self.ctx_btn.setEnabled(False); self.ctx_btn.setStyleSheet(SS_BTN_OFF)
+            self.fs_btn.setEnabled(False); self.fs_btn.setStyleSheet(_act)
+            self.play_btn.setEnabled(False); self.play_btn.setStyleSheet(_act)
+            self.ctx_btn.setEnabled(False); self.ctx_btn.setStyleSheet(_act)
             if hasattr(self, "pin_btn"):
-                self.pin_btn.setEnabled(False); self.pin_btn.setStyleSheet(SS_BTN_OFF)
+                self.pin_btn.setEnabled(False); self.pin_btn.setStyleSheet(_act)
                 self.pin_btn.setText("☆")
             if hasattr(self, "tag_input"):
                 self.tag_input.setEnabled(False); self.tag_input.clear()

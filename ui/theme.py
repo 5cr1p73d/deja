@@ -120,6 +120,28 @@ def btn(active: bool = False) -> str:
     )
 
 
+def btn_action(primary: bool = False) -> str:
+    """Bottone azione del pannello preview. Un solo accento (primary=viola)
+    per l'azione principale; gli altri neutri. Include stato :disabled."""
+    if primary:
+        return (
+            f"QPushButton{{background:rgba(167,139,250,0.16); color:{INK}; "
+            f"border:1px solid rgba(167,139,250,0.45); border-radius:{R_MD}px; "
+            f"font-family:'{SANS}'; font-size:12px; font-weight:600; padding:6px 14px;}}"
+            f"QPushButton:hover{{background:rgba(167,139,250,0.26);}}"
+            f"QPushButton:disabled{{background:rgba(255,255,255,0.03); color:{INK_FAINT}; "
+            f"border:1px solid {LINE_SOFT};}}"
+        )
+    return (
+        f"QPushButton{{background:rgba(255,255,255,0.05); color:{INK}; "
+        f"border:1px solid {LINE}; border-radius:{R_MD}px; "
+        f"font-family:'{SANS}'; font-size:12px; font-weight:500; padding:6px 14px;}}"
+        f"QPushButton:hover{{background:rgba(255,255,255,0.09);}}"
+        f"QPushButton:disabled{{background:transparent; color:{INK_FAINT}; "
+        f"border:1px solid {LINE_SOFT};}}"
+    )
+
+
 def line_edit() -> str:
     return (
         f"QLineEdit{{border:none; background:transparent; color:{INK}; "
