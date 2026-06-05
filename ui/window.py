@@ -303,6 +303,36 @@ def _human_ago(ts_iso):
         return f"{i18n.days()[local.weekday()]} {local.strftime('%H:%M')}"
     return f"{i18n.days()[local.weekday()]} {local.day} {i18n.months()[local.month-1]}"
 
+
+def _fmt_clock(ts_iso):
+    """ISO → 'HH:MM' locale. Per la sotto-riga in Esplora (l'ago relativo
+    sarebbe 'ora' identico su tutte le righe → rumore)."""
+    try:
+        ts = datetime.fromisoformat(ts_iso)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.astimezone().strftime("%H:%M")
+    except Exception:
+        return ts_iso[11:16] if len(ts_iso) >= 16 else ts_iso
+
+
+def _fmt_when(ts_iso):
+    """ISO → 'oggi · 21:46' / 'ieri · 21:46' / '5 giu · 21:46' (header preview)."""
+    try:
+        ts = datetime.fromisoformat(ts_iso)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        local = ts.astimezone(); hm = local.strftime("%H:%M")
+        today = datetime.now().date(); d = local.date()
+        if d == today:
+            return f"{t('win.sb_today').lower()} · {hm}"
+        if (today - d).days == 1:
+            return f"{t('win.sb_yesterday').lower()} · {hm}"
+        return f"{local.day} {i18n.months()[local.month-1][:3].lower()} · {hm}"
+    except Exception:
+        return ts_iso[:16].replace("T", " ")
+
+
 def _highlight_tokens(text, query):
     """HTML-escape + wrap matching tokens in <mark>."""
     import re as __re, html as __html
@@ -3489,6 +3519,14 @@ class DejaWindow(QWidget):
         self.chat_btn.clicked.connect(self._show_chat)
         sl.addWidget(self.chat_btn)
 
+        # Impostazioni: prima solo nel tray (scomodo). Ora icona ⚙ nel top bar.
+        self.settings_btn = QPushButton("⚙"); self.settings_btn.setFixedSize(30, 30)
+        self.settings_btn.setStyleSheet(theme.icon_btn())
+        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_btn.setToolTip("Impostazioni")
+        self.settings_btn.clicked.connect(self._open_settings)
+        sl.addWidget(self.settings_btn)
+
         root.addWidget(sw)
 
         self.sep = QWidget(); self.sep.setFixedHeight(1); self.sep.setStyleSheet(f"background:{BORDER_STR};"); self.sep.hide()
@@ -3501,25 +3539,28 @@ class DejaWindow(QWidget):
         self.status.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; letter-spacing:1px;")
         self.status.hide(); root.addWidget(self.status)
 
-        # ── Date Filter ────────────────────────────────────────────
-        self.date_bar = QWidget(); self.date_bar.setFixedHeight(34); self.date_bar.setStyleSheet("background:transparent;")
-        dl = QHBoxLayout(self.date_bar); dl.setContentsMargins(24, 0, 24, 0); dl.setSpacing(12)
+        # ── Filtri (data + tipo) su UNA sola riga ───────────────────
+        # date_bar = contenitore-riga (pills data a sinistra, pills tipo a destra).
+        # Meno chrome impilata: prima erano due righe separate.
+        self.date_bar = QWidget(); self.date_bar.setFixedHeight(36); self.date_bar.setStyleSheet("background:transparent;")
+        dl = QHBoxLayout(self.date_bar); dl.setContentsMargins(24, 0, 24, 0); dl.setSpacing(8)
         self._dbtn = {}
         for lbl, key in [(t("win.sb_today"), "today"), (t("win.sb_yesterday"), "yesterday"), (t("win.sb_week"), "week"), (t("win.sb_all"), "all")]:
             b = QPushButton(lbl); b.setFixedHeight(28); b.setCursor(Qt.CursorShape.PointingHandCursor)
             force_style(b, date_pill(key == "all")); b.clicked.connect(lambda _, k=key: self._apply_date_filter(k))
             self._dbtn[key] = b; dl.addWidget(b)
-        dl.addStretch(); self.date_bar.hide(); root.addWidget(self.date_bar)
+        dl.addStretch()
 
-        # ── Category Filter ────────────────────────────────────────
-        self.filter_bar = QWidget(); self.filter_bar.setFixedHeight(36); self.filter_bar.setStyleSheet("background:transparent;")
-        fl = QHBoxLayout(self.filter_bar); fl.setContentsMargins(24, 0, 24, 0); fl.setSpacing(10)
+        # Filtro tipo (Tutto/Immagini/Audio) a destra della stessa riga.
+        self.filter_bar = QWidget(); self.filter_bar.setStyleSheet("background:transparent;")
+        fl = QHBoxLayout(self.filter_bar); fl.setContentsMargins(0, 0, 0, 0); fl.setSpacing(8)
         self._fbtn = {}
         for key, lbl in [("all", "Tutto"), ("screenshot", "Immagini"), ("audio", "Audio")]:
             b = QPushButton(lbl); b.setFixedHeight(28); b.setCursor(Qt.CursorShape.PointingHandCursor)
             force_style(b, pill(key == "all", key)); b.clicked.connect(lambda _, k=key: self._set_filter(k))
             self._fbtn[key] = b; fl.addWidget(b)
-        fl.addStretch(); self.filter_bar.hide(); root.addWidget(self.filter_bar)
+        self.filter_bar.hide(); dl.addWidget(self.filter_bar)
+        self.date_bar.hide(); root.addWidget(self.date_bar)
 
         # ── Sidebar (visibile solo in fullscreen) ─────────────
         self._sidebar = QWidget(); self._sidebar.setFixedWidth(SIDEBAR_W)
@@ -3732,10 +3773,23 @@ class DejaWindow(QWidget):
 
         self.preview_scroll = QScrollArea(); self.preview_scroll.setWidgetResizable(True)
         self.preview_scroll.setStyleSheet(f"background:transparent; border:none; QScrollBar:vertical{{background:transparent; width:5px;}} QScrollBar::handle:vertical{{background:{BORDER_STR}; border-radius:2px;}}")
-        self.preview_lbl = ClickableLabel(); self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Contenuto scroll = immagine + testo OCR sotto (riempie il pannello,
+        # niente più immagine sola che galleggia in un vuoto).
+        _pv_content = QWidget(); _pv_content.setStyleSheet("background:transparent;")
+        _pv_cl = QVBoxLayout(_pv_content); _pv_cl.setContentsMargins(0, 0, 0, 0); _pv_cl.setSpacing(12)
+        self.preview_lbl = ClickableLabel()
+        self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self.preview_lbl.setStyleSheet("background:transparent;")
         self.preview_lbl.dbl.connect(self._open_fullscreen)
-        self.preview_scroll.setWidget(self.preview_lbl); pv_layout.addWidget(self.preview_scroll, stretch=1)
+        _pv_cl.addWidget(self.preview_lbl)
+        self.preview_ocr = QLabel(); self.preview_ocr.setWordWrap(True)
+        self.preview_ocr.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.preview_ocr.setFont(QFont(UI_FONT, 10))
+        self.preview_ocr.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.preview_ocr.setStyleSheet(f"color:{INK_DIM}; background:transparent; line-height:140%;")
+        _pv_cl.addWidget(self.preview_ocr)
+        _pv_cl.addStretch()
+        self.preview_scroll.setWidget(_pv_content); pv_layout.addWidget(self.preview_scroll, stretch=1)
 
         split_layout.addWidget(self._preview_panel, stretch=1)
         self.stack.addWidget(split_container)
@@ -4173,7 +4227,6 @@ class DejaWindow(QWidget):
                 hdr.setFlags(hdr.flags() & ~Qt.ItemFlag.ItemIsSelectable & ~Qt.ItemFlag.ItemIsEnabled)
                 self.results_list.addItem(hdr)
                 last_bucket = bucket_key
-            ts_rel = _human_ago(r["ts"])
             is_audio = r.get("type") == "audio"
             if is_audio:
                 transcript = r.get("transcript", "").strip()
@@ -4181,8 +4234,14 @@ class DejaWindow(QWidget):
             else:
                 app = r.get("app", "?")
                 title = app if len(app) <= 38 else app[:35] + "…"
-            tag = "✓ esatto" if r.get("exact") else f"{int(r['score'] * 100)}%"
-            item = QListWidgetItem(f"{title}\n{ts_rel}   •   {tag}")
+            if self._all_mode:
+                # Esplora: niente score (sarebbe 100% su tutto) e orario reale
+                # invece di "ora" ripetuto su ogni riga.
+                item = QListWidgetItem(f"{title}\n{_fmt_clock(r['ts'])}")
+            else:
+                ts_rel = _human_ago(r["ts"])
+                tag = "✓ esatto" if r.get("exact") else f"{int(r['score'] * 100)}%"
+                item = QListWidgetItem(f"{title}\n{ts_rel}   •   {tag}")
             item.setData(Qt.ItemDataRole.UserRole, i); item.setData(ITEM_TYPE_ROLE, "audio" if is_audio else "screenshot")
             self.results_list.addItem(item)
         # Aggiorna count badges
@@ -4289,7 +4348,8 @@ class DejaWindow(QWidget):
         idx = item.data(Qt.ItemDataRole.UserRole)
         if idx is None or idx >= len(self._filtered): return
         r = self._filtered[idx]
-        self.preview_info.setText(f"{r.get('app', '?')}   •   {r['ts'][:19].replace('T', ' ')}")
+        self.preview_info.setText(f"{r.get('app', '?')}   •   {_fmt_when(r['ts'])}")
+        self.preview_ocr.setText("")  # ripulito; riempito solo per gli screenshot
         # Ferma audio precedente
         self._stop_audio() if self._is_playing else None
         self._reset_audio_player()
@@ -4303,7 +4363,7 @@ class DejaWindow(QWidget):
             except Exception:
                 pass
             url = r.get("url", ""); title = r.get("title", "") or url; text = r.get("text", "")
-            self.preview_info.setText(f"🌐 {r.get('domain','')}   •   {r['ts'][:19].replace('T', ' ')}")
+            self.preview_info.setText(f"🌐 {r.get('domain','')}   •   {_fmt_when(r['ts'])}")
             self.preview_lbl.setTextFormat(Qt.TextFormat.RichText)
             self.preview_lbl.setOpenExternalLinks(True)
             self.preview_lbl.setWordWrap(True)
@@ -4380,8 +4440,13 @@ class DejaWindow(QWidget):
             self.audio_player_bar.hide()
 
             conn = get_conn()
-            row_db = conn.cursor().execute("SELECT image FROM screenshots WHERE id=?", (r["id"],)).fetchone()
+            row_db = conn.cursor().execute("SELECT image, text FROM screenshots WHERE id=?", (r["id"],)).fetchone()
             conn.close()
+
+            # Testo riconosciuto (OCR) sotto l'immagine: riempie il pannello.
+            ocr = (row_db[1] if row_db and len(row_db) > 1 else "") or ""
+            ocr = " ".join(ocr.split())
+            self.preview_ocr.setText(ocr[:1200] + ("…" if len(ocr) > 1200 else "") if ocr else "")
 
             if row_db and row_db[0]:
                 px = QPixmap(); px.loadFromData(row_db[0])

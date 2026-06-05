@@ -142,6 +142,15 @@ def btn_action(primary: bool = False) -> str:
     )
 
 
+def icon_btn() -> str:
+    """Bottone-icona quadrato (es. ⚙ impostazioni) nel top bar."""
+    return (
+        f"QPushButton{{background:transparent; color:{INK_SOFT}; "
+        f"border:1px solid {LINE}; border-radius:{R_SM}px; font-size:15px;}}"
+        f"QPushButton:hover{{background:rgba(255,255,255,0.06); color:{INK};}}"
+    )
+
+
 def line_edit() -> str:
     return (
         f"QLineEdit{{border:none; background:transparent; color:{INK}; "
