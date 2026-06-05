@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QListWidget, QListWidgetItem,
     QLabel, QPushButton, QScrollArea, QDialog,
-    QApplication, QGraphicsDropShadowEffect, QStackedWidget,
+    QApplication, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QStackedWidget,
     QStyledItemDelegate, QStyle, QSlider,
     QTabWidget, QTextEdit, QFrame, QSizePolicy, QSpinBox, QComboBox
 )
@@ -23,6 +23,7 @@ from PyQt6.QtGui import (
     QRegion, QPen, QLinearGradient, QRadialGradient, QKeyEvent, QIcon, QPolygonF
 )
 
+from ui import theme
 from ui.theme import INK, INK_SOFT, INK_DIM, INK_FAINT, EMERALD
 from db import get_conn
 from modules import search as search_module
@@ -3383,10 +3384,7 @@ class DejaWindow(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(t("win.main_search_ph"))
         self.search_input.setFont(QFont(UI_FONT, 16, QFont.Weight.Normal))
-        self.search_input.setStyleSheet(
-            f"QLineEdit{{border:none; background:transparent; color:{TEXT_PRIMARY}; "
-            f"selection-background-color:rgba(167,139,250,0.35); selection-color:#ffffff;}}"
-        )
+        self.search_input.setStyleSheet(theme.line_edit())
         self.search_input.returnPressed.connect(self._do_search)
         self.search_input.textChanged.connect(self._on_text_changed)
         # History completer
@@ -3578,17 +3576,7 @@ class DejaWindow(QWidget):
         self.results_list.setWordWrap(True); self.results_list.setUniformItemSizes(True)
         self.results_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.results_list.setMouseTracking(True)
-        self.results_list.setStyleSheet(f"""
-            QListWidget {{ background:transparent; border:none; outline:none; }}
-            QListWidget::item {{ background:transparent; border:none; }}
-            QScrollBar:vertical {{ background:transparent; width:8px; margin:6px 2px; }}
-            QScrollBar::handle:vertical {{
-                background:rgba(255,255,255,0.10); border-radius:3px; min-height:30px;
-            }}
-            QScrollBar::handle:vertical:hover {{ background:rgba(167,139,250,0.40); }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background:transparent; }}
-        """)
+        self.results_list.setStyleSheet(theme.results_list())
         self.results_list.setItemDelegate(MinimalItemDelegate(self.results_list))
         self.results_list.currentRowChanged.connect(self._on_row_changed)
         self.results_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -4131,6 +4119,22 @@ class DejaWindow(QWidget):
             self.results_list.addItem(item)
         # Aggiorna count badges
         self._update_filter_pill_counts()
+        self._animate_results_in()
+
+    def _animate_results_in(self):
+        """Fade-in morbido della lista quando i risultati cambiano (Refined II)."""
+        try:
+            eff = QGraphicsOpacityEffect(self.results_list)
+            self.results_list.setGraphicsEffect(eff)
+            anim = QPropertyAnimation(eff, b"opacity", self)
+            anim.setDuration(240); anim.setStartValue(0.0); anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            # rimuovi l'effetto a fine animazione (evita overhead di repaint)
+            anim.finished.connect(lambda: self.results_list.setGraphicsEffect(None))
+            anim.start()
+            self._results_fade = anim  # ref per non farlo GC-are
+        except Exception:
+            pass
 
     def _on_row_changed(self, row):
         item = self.results_list.item(row)
