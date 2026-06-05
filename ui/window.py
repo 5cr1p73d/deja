@@ -3772,21 +3772,27 @@ class DejaWindow(QWidget):
         pv_layout.addWidget(self.audio_player_bar)
 
         self.preview_scroll = QScrollArea(); self.preview_scroll.setWidgetResizable(True)
-        self.preview_scroll.setStyleSheet(f"background:transparent; border:none; QScrollBar:vertical{{background:transparent; width:5px;}} QScrollBar::handle:vertical{{background:{BORDER_STR}; border-radius:2px;}}")
-        # Contenuto scroll = immagine + testo OCR sotto (riempie il pannello,
-        # niente più immagine sola che galleggia in un vuoto).
+        self.preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.preview_scroll.setStyleSheet(f"background:transparent; border:none; QScrollBar:vertical{{background:transparent; width:6px; margin:2px;}} QScrollBar::handle:vertical{{background:rgba(255,255,255,0.07); border-radius:3px; min-height:24px;}} QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{{height:0;}}")
+        # Contenuto scroll = immagine + (sotto, discreto) testo riconosciuto.
         _pv_content = QWidget(); _pv_content.setStyleSheet("background:transparent;")
-        _pv_cl = QVBoxLayout(_pv_content); _pv_cl.setContentsMargins(0, 0, 0, 0); _pv_cl.setSpacing(12)
+        _pv_cl = QVBoxLayout(_pv_content); _pv_cl.setContentsMargins(0, 0, 0, 0); _pv_cl.setSpacing(10)
         self.preview_lbl = ClickableLabel()
         self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self.preview_lbl.setStyleSheet("background:transparent;")
         self.preview_lbl.dbl.connect(self._open_fullscreen)
         _pv_cl.addWidget(self.preview_lbl)
+        # Etichetta OCR: chiaramente secondaria (l'OCR di uno screenshot è rumoroso).
+        self.preview_ocr_lbl = QLabel("TESTO RICONOSCIUTO")
+        self.preview_ocr_lbl.setFont(QFont(MONO_FONT, 8, QFont.Weight.Medium))
+        self.preview_ocr_lbl.setStyleSheet(f"color:{INK_FAINT}; background:transparent; letter-spacing:1.5px;")
+        self.preview_ocr_lbl.hide()
+        _pv_cl.addWidget(self.preview_ocr_lbl)
         self.preview_ocr = QLabel(); self.preview_ocr.setWordWrap(True)
         self.preview_ocr.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.preview_ocr.setFont(QFont(UI_FONT, 10))
+        self.preview_ocr.setFont(QFont(UI_FONT, 9))
         self.preview_ocr.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.preview_ocr.setStyleSheet(f"color:{INK_DIM}; background:transparent; line-height:140%;")
+        self.preview_ocr.setStyleSheet(f"color:{INK_FAINT}; background:transparent;")
         _pv_cl.addWidget(self.preview_ocr)
         _pv_cl.addStretch()
         self.preview_scroll.setWidget(_pv_content); pv_layout.addWidget(self.preview_scroll, stretch=1)
@@ -4349,7 +4355,7 @@ class DejaWindow(QWidget):
         if idx is None or idx >= len(self._filtered): return
         r = self._filtered[idx]
         self.preview_info.setText(f"{r.get('app', '?')}   •   {_fmt_when(r['ts'])}")
-        self.preview_ocr.setText("")  # ripulito; riempito solo per gli screenshot
+        self.preview_ocr.setText(""); self.preview_ocr_lbl.hide()  # solo per screenshot
         # Ferma audio precedente
         self._stop_audio() if self._is_playing else None
         self._reset_audio_player()
@@ -4443,10 +4449,14 @@ class DejaWindow(QWidget):
             row_db = conn.cursor().execute("SELECT image, text FROM screenshots WHERE id=?", (r["id"],)).fetchone()
             conn.close()
 
-            # Testo riconosciuto (OCR) sotto l'immagine: riempie il pannello.
+            # Testo riconosciuto (OCR): discreto e breve — è rumoroso di natura.
             ocr = (row_db[1] if row_db and len(row_db) > 1 else "") or ""
             ocr = " ".join(ocr.split())
-            self.preview_ocr.setText(ocr[:1200] + ("…" if len(ocr) > 1200 else "") if ocr else "")
+            if ocr:
+                self.preview_ocr.setText(ocr[:280] + ("…" if len(ocr) > 280 else ""))
+                self.preview_ocr_lbl.show()
+            else:
+                self.preview_ocr.setText(""); self.preview_ocr_lbl.hide()
 
             if row_db and row_db[0]:
                 px = QPixmap(); px.loadFromData(row_db[0])
