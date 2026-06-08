@@ -200,7 +200,15 @@ def main():
     # Déjà ora è un'APP a finestra (pivot da overlay): si avvia visibile e resta
     # in taskbar. Il tray sopravvive alla chiusura finestra (riapri da tray/hotkey).
     window = AppShell()
-    window.show(); window.raise_(); window.activateWindow()
+    # Gate di sblocco all'avvio: se il blocco è attivo, NON mostrare la finestra
+    # (e i suoi dati) finché l'utente non si autentica. Altrimenti il PIN era
+    # aggirabile semplicemente all'avvio o dalla nav in-app. Se annulla, resta
+    # in tray: riaprendo da tray/hotkey verrà richiesto lo sblocco.
+    from modules import applock
+    if applock.ensure_unlocked(window):
+        window.show(); window.raise_(); window.activateWindow()
+    else:
+        logging.getLogger("deja").info("Avvio bloccato: finestra in tray fino allo sblocco.")
     stop_event = threading.Event()
     tray = DejaTray(window, stop_event, app)
     tray.show()

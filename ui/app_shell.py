@@ -750,7 +750,17 @@ class AppShell(QWidget):
         self._search_records = []
         self._gallery_loaded = False
         self._tl_filter = "all"
+        self._current_page = "timeline"
         self._load()  # carica i dati reali dopo che il detail esiste
+
+        # Quasi-realtime leggero: ogni pochi secondi controlla se sono arrivati
+        # nuovi screenshot (query MAX(id), economica) e ricarica la timeline SOLO
+        # se è cambiata e l'utente è in cima (non interrompe chi sta sfogliando).
+        self._last_max_id = None
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(4000)
+        self._refresh_timer.timeout.connect(self._maybe_refresh)
+        self._refresh_timer.start()
 
     # ── Pagina Timeline ─────────────────────────────────────────────
     def _build_timeline_page(self):
@@ -1092,6 +1102,7 @@ class AppShell(QWidget):
         idx = self._page_index.get(key)
         if idx is None:
             return
+        self._current_page = key
         self._stack.setCurrentIndex(idx)
         self._fade_in(self._stack.currentWidget())
         for k, b in self._nav.items():
@@ -2117,6 +2128,38 @@ class AppShell(QWidget):
         self._worker.done.connect(self._on_data)
         self._worker.start()
 
+    def _maybe_refresh(self):
+        """Tick del refresh quasi-realtime. Condizioni per ricaricare (tutte
+        leggere): finestra visibile, pagina Timeline, nessun caricamento in
+        corso, ci sono screenshot nuovi rispetto all'ultimo visto, e l'utente è
+        in cima alla lista (non interrompe chi sta scorrendo/leggendo)."""
+        if not self.isVisible():
+            return
+        if getattr(self, "_current_page", "timeline") != "timeline":
+            return
+        w = getattr(self, "_worker", None)
+        if w is not None and w.isRunning():
+            return
+        try:
+            from db import get_conn
+            with get_conn() as conn:
+                row = conn.cursor().execute("SELECT MAX(id) FROM screenshots").fetchone()
+            mx = row[0] if row else None
+        except Exception:
+            return
+        if mx is None:
+            return
+        if self._last_max_id is None:
+            self._last_max_id = mx
+            return
+        if mx <= self._last_max_id:
+            return
+        sb = self.timeline.verticalScrollBar()
+        if sb is not None and sb.value() > 4:
+            return  # sta sfogliando: non strappargli la posizione sotto i piedi
+        self._last_max_id = mx
+        self._load()
+
     def _on_data(self, records):
         self._records = records or []
         self._build_rows()
@@ -2633,11 +2676,25 @@ class AppShell(QWidget):
         if self.isVisible() and not self.isMinimized():
             self.hide()
         else:
+            # Gate di sblocco prima di rivelare i dati (hotkey = stesso confine
+            # di accesso del tray).
+            from modules import applock
+            if not applock.ensure_unlocked(self):
+                return
             self.showNormal(); self.raise_(); self.activateWindow()
 
     def hideEvent(self, e):
         if self._is_playing:
             self._stop_audio()
+        # Re-lock quando la finestra torna nel tray: con policy "every_access"
+        # il prossimo accesso richiede di nuovo lo sblocco. Senza questo, uno
+        # sblocco singolo restava valido per sempre.
+        try:
+            from modules import applock
+            if applock.lock_enabled() and applock.relock_policy() == "every_access":
+                applock.lock_now()
+        except Exception:
+            pass
         super().hideEvent(e)
 
     def closeEvent(self, e):

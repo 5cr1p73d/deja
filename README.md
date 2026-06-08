@@ -27,11 +27,12 @@ The entire index lives locally. Capture/OCR/transcription models run offline; op
 - 🖼️ **Screen capture + OCR** (`ita+eng`, Tesseract) with deduplication of identical frames.
 - 🎙️ **Audio capture** — system loopback + microphone, transcription via `faster-whisper`.
 - 🔎 **Hybrid search** — semantic (768-dim embeddings, cosine int8 via `sqlite-vec`) + exact match, with filters by date and type.
-- 🗂️ **"Explore" Timeline** — browse everything by Today / Yesterday / 7 days / All.
+- 🗂️ **"Explore" Timeline** — browse everything by Today / Yesterday / 7 days / All, with **near-realtime** updates (new captures appear automatically while you stay at the top, without polling the system hard).
 - 💬 **AI Chat with RAG** — ask questions about your activity; the assistant retrieves relevant memories as context.
 - 👁️ **Ask Screen** (`Ctrl+Shift+A`) — ask the AI what's on the screen right now (vision).
 - 🌍 **Multilingual** — interface and search in `it` / `en` / `es`.
 - 🔒 **Privacy-first** — local DB, onboarding with explicit consent, privacy filters.
+- 🔐 **App Lock** — unlock with **Windows Hello** or an **app PIN** (PBKDF2 + DPAPI) before any data is revealed; gate enforced on startup, hotkey and tray, with re-lock on every access.
 - 🧯 **Robust degradation** — if ML models fail to load (e.g. missing VC++ redist), capture + OCR + text search continue to work.
 
 ## Tech Stack
@@ -50,7 +51,7 @@ The entire index lives locally. Capture/OCR/transcription models run offline; op
 
 ## Installation (user)
 
-Download the Windows installer from the [Releases](https://github.com/5cr1p73d/deja/releases) section (`Deja-Setup-1.0.0.exe`, ~265 MB, includes the VC++ runtime) and run it. On first launch, the onboarding asks for consent before starting any capture.
+Download the Windows installer from the [Releases](https://github.com/5cr1p73d/deja/releases) section (`Deja-Setup-1.2.1.exe`, ~267 MB, includes the VC++ runtime) and run it. On first launch, the onboarding asks for consent before starting any capture.
 
 > OCR requires [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki).
 > Déjà looks for it automatically (env `TESSERACT_CMD` → `PATH` → known locations).
