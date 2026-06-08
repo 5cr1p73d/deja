@@ -1898,31 +1898,62 @@ class AppShell(QWidget):
         except Exception as e: print(f"[Chat] clear fail: {e}")
         self._chat_history = []; self._chat_turn_bubbles = []
         self.chat_page.clear_messages()
+        try: self.chat_page.clear_attachment()
+        except Exception: pass
         if not ai_assistant.is_configured():
             self.chat_page.add_notice("Configura una API key in Impostazioni → AI per usare l'Assistente.")
         else:
             self.chat_page.set_busy(False); self.chat_page.input.setFocus()
 
     def _send_chat_message(self, text):
-        if not text.strip():
+        # Allegato corrente (chip sopra la barra): si invia con o senza testo.
+        att = self.chat_page.take_attachment() if hasattr(self.chat_page, "take_attachment") else None
+        text = (text or "").strip()
+        if not text and not att:
             return
         if not ai_assistant.is_configured():
             self.chat_page.add_error("API key mancante. Apri Impostazioni → AI.")
+            if att:
+                self.chat_page.set_attachment(att)   # non perdere l'allegato
             return
         if self._chat_worker is not None and self._chat_worker.isRunning():
+            if att:
+                self.chat_page.set_attachment(att)
             return
-        self.chat_page.add_user(text)
+        # Bolla visibile: chip allegato (se c'è) + testo. NIENTE dump del contenuto.
+        self.chat_page.add_user(text, attachment=att)
+        # Messaggio reale per l'AI: allegato (ref id univoco + contenuto) + domanda.
+        ai_text = self._compose_ai_message(att, text)
         _, lbl = self.chat_page.add_thinking()
         self._chat_thinking = lbl
         self._chat_current_bubble = None; self._chat_current_text = ""
         self._chat_turn_bubbles = []
         self.chat_page.set_busy(True)
-        try: ai_assistant.save_chat_message("user", text)
+        try: ai_assistant.save_chat_message("user", ai_text)
         except Exception as e: print(f"[Chat] save user fail: {e}")
-        self._chat_worker = ChatWorker(self._chat_history, text)
+        self._chat_worker = ChatWorker(self._chat_history, ai_text)
         self._chat_worker.chunk.connect(self._on_chat_chunk)
-        self._chat_worker.finished_streaming.connect(lambda u=text: self._on_chat_done(u))
+        self._chat_worker.finished_streaming.connect(lambda u=ai_text: self._on_chat_done(u))
         self._chat_worker.start()
+
+    def _compose_ai_message(self, att, text):
+        """Compone il messaggio inviato al modello: se c'è un allegato, include il
+        riferimento UNIVOCO per id + il contenuto reale, poi la domanda dell'utente."""
+        if not att:
+            return text
+        ref = att.get("ref", "")
+        sub = att.get("subtitle", "")
+        head = att.get("title", "questo ricordo")
+        content = (att.get("content") or "").strip()
+        if len(content) > 4000:
+            content = content[:4000].rstrip() + "…"
+        first = f"Allegato — {head} {ref}".strip()
+        if sub:
+            first += f" ({sub})"
+        parts = [first]
+        parts.append(f"Contenuto:\n«{content}»" if content else "(Nessun testo riconosciuto nel ricordo.)")
+        parts.append(f"Domanda: {text}" if text else "Parlami di questo ricordo.")
+        return "\n\n".join(parts)
 
     def _remove_thinking(self):
         if self._chat_thinking is None:
@@ -2359,40 +2390,34 @@ class AppShell(QWidget):
         sid = getattr(self, "_cur_sid", None)
         when = self._detail_when(r.get("ts", "")) if r else ""
 
-        # Costruisci riferimento univoco + contenuto reale del ricordo.
         if kind == "audio" and sid is not None:
-            ref = f"[au:{sid}]"; what = f"questa registrazione audio del {when}".strip()
-            content = (r.get("transcript") or "").strip()
+            meta = {"kind": "audio", "ref": f"[au:{sid}]", "glyph": "🎙", "thumb": None,
+                    "title": self._detail_title.text() or "Registrazione",
+                    "subtitle": f"Registrazione · {when}".strip(" ·"),
+                    "content": (r.get("transcript") or "").strip()}
         elif kind == "note":
-            ref = ""; what = f"questa pagina web del {when}".strip()
-            content = "\n".join(p for p in (r.get("title"), r.get("url"), r.get("text")) if p).strip()
+            meta = {"kind": "note", "ref": "", "glyph": "🌐", "thumb": None,
+                    "title": r.get("title") or self._detail_title.text() or "Pagina web",
+                    "subtitle": f"Pagina web · {when}".strip(" ·"),
+                    "content": "\n".join(p for p in (r.get("title"), r.get("url"), r.get("text")) if p).strip()}
         elif kind == "screen" and sid is not None:
-            ref = f"[ss:{sid}]"; what = f"questa schermata del {when}".strip()
-            content = (r.get("text") or "").strip()
+            meta = {"kind": "screen", "ref": f"[ss:{sid}]", "glyph": "🖼",
+                    "thumb": getattr(self, "_current_pixmap", None),
+                    "title": self._detail_title.text() or "Schermata",
+                    "subtitle": f"Schermata · {when}".strip(" ·"),
+                    "content": (r.get("text") or "").strip()}
         else:
-            # nessun ricordo selezionato → comportamento minimo
-            try:
-                self.chat_page.input.setFocus()
-            except Exception:
-                pass
+            try: self.chat_page.input.setFocus()
+            except Exception: pass
             return
 
-        if len(content) > 4000:
-            content = content[:4000].rstrip() + "…"
-        body = f"\n\nContenuto del ricordo:\n«{content}»" if content else \
-               "\n\n(Questo ricordo non ha testo riconosciuto.)"
-        msg = f"Parlami di {what} {ref}.{body}".strip()
-
-        # Invia subito come allegato. Se l'AI non è configurata, lascia il messaggio
-        # nell'input così l'utente vede cosa verrebbe inviato.
-        if ai_assistant.is_configured():
-            self._send_chat_message(msg)
-        else:
-            self.chat_page.input.setText(msg)
-            try:
-                self.chat_page.input.setFocus()
-            except Exception:
-                pass
+        # Allega come "file" (chip sopra la barra), input vuoto: l'utente può poi
+        # scrivere una domanda o inviare l'allegato così com'è.
+        self.chat_page.set_attachment(meta)
+        try:
+            self.chat_page.input.setFocus()
+        except Exception:
+            pass
 
     def _detail_pin(self):
         """Pin/unpin del ricordo (★) via db.set_pinned."""

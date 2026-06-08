@@ -1596,6 +1596,17 @@ class ChatPage(QWidget):
         es.addWidget(es_s)
         self.msg_layout.insertWidget(0, self.empty_state)
 
+        # Attachment bar (chip sopra la barra di scrittura, stile "file allegato").
+        # Vuota/nascosta finché non si allega un ricordo da "Chiedi all'AI".
+        self._attachment = None
+        self._attach_chip = None
+        self.attach_bar = QWidget(); self.attach_bar.setStyleSheet("background:transparent;")
+        self._attach_row = QHBoxLayout(self.attach_bar)
+        self._attach_row.setContentsMargins(2, 0, 2, 0); self._attach_row.setSpacing(8)
+        self._attach_row.addStretch()
+        self.attach_bar.setVisible(False)
+        root.addWidget(self.attach_bar)
+
         # Input row
         input_row = QHBoxLayout(); input_row.setSpacing(8)
         self.input = QLineEdit()
@@ -1658,11 +1669,91 @@ class ChatPage(QWidget):
         if self.empty_state.isVisible():
             self.empty_state.hide()
 
-    def add_user(self, text):
+    # ── Allegati (chip "file allegato" sopra la barra) ──────────────
+    def _build_attach_chip(self, meta, removable=True):
+        chip = QWidget(); chip.setObjectName("attachchip")
+        chip.setStyleSheet("QWidget#attachchip{background:rgba(167,139,250,0.10);"
+                           " border:1px solid rgba(167,139,250,0.35); border-radius:10px;}"
+                           " QWidget#attachchip QLabel{background:transparent; border:none;}")
+        h = QHBoxLayout(chip); h.setContentsMargins(7, 6, 8, 6); h.setSpacing(9)
+        thumb = meta.get("thumb")
+        ic = QLabel(); ic.setFixedSize(30, 30); ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ic.setStyleSheet("background:rgba(255,255,255,0.06); border-radius:7px; font-size:15px;")
+        if thumb is not None and not thumb.isNull():
+            sc = thumb.scaled(30, 30, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                              Qt.TransformationMode.SmoothTransformation)
+            # ritaglia al centro 30x30
+            x = max(0, (sc.width() - 30) // 2); y = max(0, (sc.height() - 30) // 2)
+            ic.setPixmap(sc.copy(x, y, 30, 30))
+        else:
+            ic.setText(meta.get("glyph", "📎"))
+        h.addWidget(ic)
+        col = QVBoxLayout(); col.setContentsMargins(0, 0, 0, 0); col.setSpacing(1)
+        ttl = QLabel(meta.get("title", "Allegato")); ttl.setMaximumWidth(240)
+        ttl.setStyleSheet("color:#f3f4f6; font-size:11px; font-weight:600;")
+        ttl.setText(QFontMetrics(ttl.font()).elidedText(meta.get("title", "Allegato"),
+                                                        Qt.TextElideMode.ElideRight, 240))
+        col.addWidget(ttl)
+        sub = meta.get("subtitle", "")
+        if sub:
+            sl = QLabel(sub); sl.setStyleSheet(f"color:{TEXT_SECONDARY}; font-size:9px;")
+            col.addWidget(sl)
+        h.addLayout(col)
+        if removable:
+            rm = QPushButton("✕"); rm.setFixedSize(20, 20); rm.setCursor(Qt.CursorShape.PointingHandCursor)
+            rm.setStyleSheet("QPushButton{background:transparent; color:#9ca0ac; border:none; font-size:12px;}"
+                             "QPushButton:hover{color:#fff;}")
+            rm.clicked.connect(self.clear_attachment)
+            h.addWidget(rm)
+        return chip
+
+    def set_attachment(self, meta):
+        """Mostra un chip allegato sopra la barra; l'input resta vuoto (stile Claude)."""
+        self.clear_attachment()
+        self._attachment = meta
+        self._attach_chip = self._build_attach_chip(meta, removable=True)
+        self._attach_row.insertWidget(self._attach_row.count() - 1, self._attach_chip)
+        self.attach_bar.setVisible(True)
+        self.input.setPlaceholderText("Aggiungi una domanda (opzionale)…")
+
+    def clear_attachment(self):
+        if self._attach_chip is not None:
+            self._attach_row.removeWidget(self._attach_chip)
+            self._attach_chip.deleteLater(); self._attach_chip = None
+        self._attachment = None
+        self.attach_bar.setVisible(False)
+        self.input.setPlaceholderText(t("win.chat_placeholder"))
+
+    def take_attachment(self):
+        meta = self._attachment
+        self.clear_attachment()
+        return meta
+
+    def has_attachment(self):
+        return self._attachment is not None
+
+    def add_user(self, text, attachment=None):
         self._hide_empty()
-        w, _ = _make_bubble(text, "user")
+        if attachment is not None:
+            w = self._make_user_attach_bubble(text, attachment)
+        else:
+            w, _ = _make_bubble(text, "user")
         self.msg_layout.insertWidget(self.msg_layout.count() - 1, w)
         return w
+
+    def _make_user_attach_bubble(self, text, meta):
+        container = QWidget(); container.setStyleSheet("background:transparent;")
+        outer = QHBoxLayout(container); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        outer.addStretch()
+        col = QVBoxLayout(); col.setContentsMargins(0, 0, 0, 0); col.setSpacing(6)
+        chip = self._build_attach_chip(meta, removable=False)
+        crow = QHBoxLayout(); crow.setContentsMargins(0, 0, 0, 0); crow.addStretch(); crow.addWidget(chip)
+        col.addLayout(crow)
+        if text:
+            bub, _ = _make_bubble(text, "user")
+            col.addWidget(bub)
+        outer.addLayout(col)
+        return container
 
     def add_thinking(self):
         self._hide_empty()
