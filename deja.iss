@@ -4,7 +4,7 @@
 ; Inno Setup gratuito: https://jrsoftware.org/isdl.php
 
 #define MyAppName "Déjà"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "Scr1p73d"
 #define MyAppExeName "Deja.exe"
 

@@ -1120,14 +1120,6 @@ class AppShell(QWidget):
         except Exception:
             pass
 
-    def _open_settings(self, page="general"):
-        try:
-            from ui.window import SettingsDialog
-            dlg = SettingsDialog(self)
-            dlg.select_page(page); dlg.exec()
-        except Exception as e:
-            self.toast(f"Impostazioni non disponibili: {e}", level="error")
-
     def _open_about(self):
         try:
             from ui.framed import alert as _alert
@@ -1158,11 +1150,13 @@ class AppShell(QWidget):
         nvl = QVBoxLayout(nav); nvl.setContentsMargins(12, 14, 12, 14); nvl.setSpacing(2)
         self._set_stack = QStackedWidget()
         self._set_subnav = {}
-        subpages = (("capture", "Cattura", "capture", self._build_set_capture),
+        subpages = (("general", "Generale", "sliders", self._build_set_general),
+                    ("capture", "Cattura", "capture", self._build_set_capture),
                     ("privacy", "Area & Privacy", "shield", self._build_set_privacy),
-                    ("ai", "AI", "spark", self._build_set_ai),
-                    ("security", "Sicurezza", "lock", self._build_set_security),
-                    ("advanced", "Avanzate", "sliders", self._build_set_advanced))
+                    ("ai", "Assistente AI", "spark", self._build_set_ai),
+                    ("vision", "Vision", "screen", self._build_set_vision),
+                    ("models", "Modelli", "ai", self._build_set_models),
+                    ("security", "Sicurezza", "lock", self._build_set_security))
         for i, (key, label, icon, builder) in enumerate(subpages):
             b = _nav_btn(label, on=(i == 0), icon=icon)
             b.clicked.connect(lambda _=False, k=key: self._set_select(k))
@@ -1246,23 +1240,75 @@ class AppShell(QWidget):
             f"QLineEdit:focus{{border:1px solid rgba(167,139,250,0.5);}}")
         return e
 
-    def _build_set_capture(self, get_setting):
+    def _build_set_general(self, get_setting):
+        import i18n
         w, lay = self._set_body()
-        lay.addWidget(self._set_section("Cattura", first=True))
+        lay.addWidget(self._set_section("Interfaccia", first=True))
+        self._s_lang = self._set_combo(
+            [(f"{i18n.LANG_FLAGS.get(c,'')} {n}", c) for c, n in i18n.LANGUAGES.items()],
+            current=i18n.get_language(), width=180)
+        self._s_lang_old = i18n.get_language()
+        lay.addWidget(self._set_row("Lingua interfaccia", "Richiede riavvio per ridisegnare l'app.", self._s_lang))
+
+        lay.addWidget(self._set_section("Archivio"))
+        try:
+            from db import get_conn
+            conn = get_conn(); c = conn.cursor()
+            n_ss = c.execute("SELECT COUNT(*) FROM screenshots").fetchone()[0]
+            n_au = c.execute("SELECT COUNT(*) FROM audio_segments").fetchone()[0]
+            conn.close()
+        except Exception:
+            n_ss = n_au = "—"
+        lay.addWidget(self._set_row("Schermate salvate", "Totale screenshot nell'archivio locale.", self._stat_value(n_ss)))
+        lay.addWidget(self._set_row("Segmenti audio", "Totale registrazioni trascritte.", self._stat_value(n_au)))
+        lay.addStretch()
+        return w
+
+    def _build_set_capture(self, get_setting):
+        import config as _cfg
+        w, lay = self._set_body()
+        lay.addWidget(self._set_section("Registrazione", first=True))
         self._s_cap_screens = ToggleSwitch((get_setting("capture_screenshots_enabled", "1") or "1") == "1")
         lay.addWidget(self._set_row("Cattura schermate", "Salva periodicamente schermate del desktop.", self._s_cap_screens))
         self._s_cap_audio = ToggleSwitch((get_setting("capture_audio_enabled", "1") or "1") == "1")
         lay.addWidget(self._set_row("Cattura audio", "Registra e trascrive microfono / audio di sistema.", self._s_cap_audio))
-        import config as _cfg
         self._s_interval = self._set_input(str(getattr(_cfg, "CAPTURE_INTERVAL", "")), "es. 4")
         self._s_interval.setFixedWidth(90)
         lay.addWidget(self._set_row("Intervallo schermate (s)", "Secondi tra una schermata e l'altra.", self._s_interval))
+        self._s_audio_chunk = self._set_input(str(getattr(_cfg, "AUDIO_CHUNK_SECONDS", "")), "es. 30")
+        self._s_audio_chunk.setFixedWidth(90)
+        lay.addWidget(self._set_row("Durata segmento audio (s)", "Lunghezza di ogni spezzone audio registrato.", self._s_audio_chunk))
+
+        lay.addWidget(self._set_section("Dispositivi audio"))
+        try:
+            from ui.settings import _get_all_devices
+            _devs = _get_all_devices()
+        except Exception:
+            _devs = []
+        mics = [(idx, name) for tp, idx, name in _devs if tp == "mic"]
+        loops = [(idx, name) for tp, idx, name in _devs if tp == "loopback"]
+        self._s_mic = self._set_combo([("Non registrare", None)] + [(n, str(i)) for i, n in mics],
+                                      current=get_setting("audio_mic_index", None), width=220)
+        lay.addWidget(self._set_row("Microfono", "Sorgente per la voce.", self._s_mic))
+        self._s_out = self._set_combo([("Non registrare", None)] + [(n, str(i)) for i, n in loops],
+                                      current=get_setting("audio_out_index", None), width=220)
+        lay.addWidget(self._set_row("Audio di sistema", "Cattura ciò che esce dalle casse (loopback).", self._s_out))
         lay.addStretch()
         return w
 
     def _build_set_privacy(self, get_setting):
         w, lay = self._set_body()
         lay.addWidget(self._set_section("Area schermo & Privacy", first=True))
+        # Area di cattura (region picker)
+        self._s_region_lbl = QLabel(self._region_text())
+        self._s_region_lbl.setStyleSheet(f"color:{theme.INK_SOFT}; font-size:12px; background:transparent;")
+        reg_ctl = QWidget(); reg_ctl.setStyleSheet("background:transparent;")
+        rcl = QHBoxLayout(reg_ctl); rcl.setContentsMargins(0, 0, 0, 0); rcl.setSpacing(8)
+        rcl.addWidget(self._s_region_lbl)
+        rcl.addWidget(self._accent_btn("Scegli area", self._choose_region))
+        rcl.addWidget(self._ghost_btn("Reset", self._reset_region))
+        lay.addWidget(self._set_row("Area di cattura", "Limita gli screenshot a una porzione di schermo.", reg_ctl))
+
         self._s_redact = ToggleSwitch((get_setting("privacy_redact", "1") or "1") == "1")
         lay.addWidget(self._set_row("Oscura dati sensibili (PII)", "Maschera email, carte e password nel testo riconosciuto.", self._s_redact))
         try: _idle0 = int(get_setting("privacy_idle_min", "5") or 5)
@@ -1275,28 +1321,113 @@ class AppShell(QWidget):
         lay.addWidget(self._set_section("Estensione browser"))
         try:
             from modules import web_bridge as _wb
-            web_on = _wb.enabled()
+            web_on = _wb.enabled(); web_conn = _wb.is_connected()
         except Exception:
-            web_on = False
+            web_on = False; web_conn = False
         self._s_web_enabled = ToggleSwitch(web_on)
         lay.addWidget(self._set_row("Abilita estensione", "Cattura le pagine visitate (canale locale, nessuna porta di rete).", self._s_web_enabled))
         self._s_web_excluded = self._set_input(get_setting("web_excluded_domains", "") or "", "bank.com, mail.google.com")
         lay.addWidget(self._set_row("Domini da non catturare", "Uno o più domini separati da virgola.", self._s_web_excluded))
+        self._s_web_extid = self._set_input(get_setting("web_ext_id", "") or "", "ID estensione Chrome / Edge")
+        lay.addWidget(self._set_row("ID estensione", "Identificativo dell'estensione installata nel browser.", self._s_web_extid))
+        host_ctl = QWidget(); host_ctl.setStyleSheet("background:transparent;")
+        hcl = QHBoxLayout(host_ctl); hcl.setContentsMargins(0, 0, 0, 0); hcl.setSpacing(8)
+        self._s_web_status = QLabel("● connessa" if web_conn else "○ non connessa")
+        self._s_web_status.setStyleSheet(f"color:{theme.EMERALD if web_conn else theme.INK_DIM}; font-size:12px; background:transparent;")
+        hcl.addWidget(self._s_web_status)
+        hcl.addWidget(self._accent_btn("Installa host nativo", self._install_web_host))
+        lay.addWidget(self._set_row("Host nativo", "Ponte locale tra browser e Déjà.", host_ctl))
         lay.addStretch()
         return w
 
     def _build_set_ai(self, get_setting):
+        import config as _cfg
         w, lay = self._set_body()
+        try: cfg = ai_assistant.get_ai_config()
+        except Exception: cfg = {}
         lay.addWidget(self._set_section("Assistente AI", first=True))
-        self._s_ai_url = self._set_input(get_setting("ai_base_url", "") or "", "https://api.openai.com/v1")
+        _def = getattr(_cfg, "AI_BASE_URL_DEFAULT", "")
+        _url = cfg.get("base_url", "") or ""
+        self._s_ai_url = self._set_input("" if _url == _def else _url, _def or "https://api.openai.com/v1")
         lay.addWidget(self._set_row("Endpoint (base URL)", "URL compatibile OpenAI per la chat.", self._s_ai_url))
+        lay.addWidget(self._preset_chips(self._s_ai_url, [("Ollama", "http://localhost:11434/v1"), ("LM Studio", "http://localhost:1234/v1")]))
         self._s_ai_key = self._set_input("", "•••• (lascia vuoto per non cambiare)")
         self._s_ai_key.setEchoMode(QLineEdit.EchoMode.Password)
         lay.addWidget(self._set_row("API key", "Salvata cifrata (DPAPI). Vuoto = invariata.", self._s_ai_key))
-        self._s_ai_model = self._set_input(get_setting("ai_model", "") or "", "es. gpt-4o-mini")
-        lay.addWidget(self._set_row("Modello chat", "Nome del modello sull'endpoint.", self._s_ai_model))
+        self._s_ai_model = self._set_model_combo(getattr(_cfg, "AI_MODELS", []), cfg.get("model", ""))
+        mctl, self._s_ai_detect = self._combo_with_button(self._s_ai_model, "Rileva", self._ai_detect)
+        lay.addWidget(self._set_row("Modello chat", "Nome del modello sull'endpoint (o premi Rileva).", mctl))
         self._s_ai_inline = ToggleSwitch((get_setting("ai_inline_rag", "1") or "1") == "1")
         lay.addWidget(self._set_row("Cita i ricordi (RAG)", "L'assistente allega schermate/audio pertinenti alle risposte.", self._s_ai_inline))
+        self._s_ai_status = QLabel(""); self._s_ai_status.setWordWrap(True)
+        self._s_ai_status.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11px; background:transparent;")
+        lay.addWidget(self._accent_btn("Prova connessione", self._ai_test), alignment=Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(self._s_ai_status)
+        lay.addStretch()
+        return w
+
+    def _build_set_vision(self, get_setting):
+        import config as _cfg
+        w, lay = self._set_body()
+        try:
+            from modules import ask_screen as _ask
+            vcfg = _ask.get_vision_config()
+        except Exception:
+            vcfg = {"enabled": False, "base_url": "", "api_key": "", "model": ""}
+        lay.addWidget(self._set_section("Vision · Ask Screen", first=True))
+        self._s_vis_enabled = ToggleSwitch(bool(vcfg.get("enabled")))
+        lay.addWidget(self._set_row("Abilita Vision", "Interroga lo schermo con un modello multimodale.", self._s_vis_enabled))
+        _vdef = getattr(_cfg, "AI_VISION_BASE_URL_DEFAULT", "")
+        _vurl = vcfg.get("base_url", "") or ""
+        self._s_vis_url = self._set_input("" if _vurl == _vdef else _vurl, _vdef)
+        lay.addWidget(self._set_row("Endpoint (base URL)", "URL compatibile OpenAI per la vision.", self._s_vis_url))
+        lay.addWidget(self._preset_chips(self._s_vis_url, [("Ollama", "http://localhost:11434/v1"), ("LM Studio", "http://localhost:1234/v1")]))
+        self._s_vis_key = self._set_input("", "•••• (lascia vuoto per non cambiare)")
+        self._s_vis_key.setEchoMode(QLineEdit.EchoMode.Password)
+        lay.addWidget(self._set_row("API key", "Salvata cifrata (DPAPI). Vuoto = invariata.", self._s_vis_key))
+        self._s_vis_model = self._set_model_combo(getattr(_cfg, "AI_VISION_MODELS", []), vcfg.get("model", ""))
+        vctl, self._s_vis_detect = self._combo_with_button(self._s_vis_model, "Rileva", self._vis_detect)
+        lay.addWidget(self._set_row("Modello vision", "Nome del modello multimodale (o premi Rileva).", vctl))
+        self._s_vis_status = QLabel(""); self._s_vis_status.setWordWrap(True)
+        self._s_vis_status.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11px; background:transparent;")
+        lay.addWidget(self._accent_btn("Prova Vision", self._vis_test), alignment=Qt.AlignmentFlag.AlignLeft)
+        lay.addWidget(self._s_vis_status)
+        lay.addStretch()
+        return w
+
+    def _build_set_models(self, get_setting):
+        import config as _cfg
+        from modules import model_catalog as _mc
+        w, lay = self._set_body()
+        self._adv_models = {}
+        lay.addWidget(self._set_section("Modelli locali", first=True))
+        cur_embed = str(getattr(_cfg, "EMBEDDING_MODEL", "") or "")
+        emb = self._set_combo(
+            [(f"{m['label']} · {_mc.human_size(m['size_mb'])}" + (f" · {m['dims']}d" if m.get("dims") else ""), m["id"])
+             for m in _mc.EMBEDDING_MODELS], current=cur_embed)
+        if cur_embed and emb.findData(cur_embed) < 0:
+            emb.addItem(f"{cur_embed} (custom)", cur_embed); emb.setCurrentIndex(emb.count() - 1)
+        self._adv_model_block(lay, "Embedding (ricerca)", emb, "embed")
+        cur_wsp = str(getattr(_cfg, "WHISPER_MODEL", "") or "")
+        wsp = self._set_combo(
+            [(f"{m['label']} · {_mc.human_size(m['size_mb'])}", m["id"]) for m in _mc.WHISPER_MODELS],
+            current=cur_wsp)
+        if cur_wsp and wsp.findData(cur_wsp) < 0:
+            wsp.addItem(f"{cur_wsp} (custom)", cur_wsp); wsp.setCurrentIndex(wsp.count() - 1)
+        self._adv_model_block(lay, "Trascrizione (Whisper)", wsp, "whisper")
+        cur_ocr = get_setting("ocr_lang", "ita+eng") or "ita+eng"
+        ocr = self._set_combo(
+            [(f"{m['label']} · {_mc.human_size(m['size_mb'])}", m["id"]) for m in _mc.OCR_MODELS],
+            current=cur_ocr)
+        if ocr.findData(cur_ocr) < 0:
+            ocr.addItem(f"{cur_ocr} (custom)", cur_ocr); ocr.setCurrentIndex(ocr.count() - 1)
+        self._adv_model_block(lay, "OCR (lingua testo)", ocr, "ocr", downloadable=False)
+        try:
+            _score0 = int(float(getattr(_cfg, "AUDIO_MIN_SCORE", 0.25)) * 100)
+        except Exception:
+            _score0 = 25
+        self._s_audio_score = Stepper(_score0, 1, 99, step=1, suffix=" %")
+        lay.addWidget(self._set_row("Soglia rilevanza audio", "Scarta i segmenti trascritti sotto questa confidenza.", self._s_audio_score))
         lay.addStretch()
         return w
 
@@ -1305,98 +1436,441 @@ class AppShell(QWidget):
         lay.addWidget(self._set_section("Sicurezza", first=True))
         try:
             from modules import applock
-            lock_on = applock.lock_enabled()
+            lock_on = applock.lock_enabled(); hello = applock.hello_available()
         except Exception:
-            lock_on = False
+            lock_on = False; hello = False
         self._s_lock_enabled = ToggleSwitch(lock_on)
-        lay.addWidget(self._set_row("Blocco app (Windows Hello)", "Richiede sblocco all'apertura e per dati sensibili.", self._s_lock_enabled))
-        self._s_lock_relock = QComboBox()
-        self._s_lock_relock.addItem("Ogni accesso", "every_access")
-        self._s_lock_relock.addItem("Una volta per sessione", "once")
-        cur = get_setting("lock_relock", "every_access") or "every_access"
-        self._s_lock_relock.setCurrentIndex(max(0, self._s_lock_relock.findData(cur)))
-        self._s_lock_relock.setFixedHeight(32); self._s_lock_relock.setMinimumWidth(190)
-        self._s_lock_relock.setStyleSheet(
-            f"QComboBox{{background:rgba(255,255,255,0.04); color:{theme.INK}; border:1px solid {theme.LINE};"
-            f" border-radius:8px; padding:0 10px; font-size:12px;}}")
+        lay.addWidget(self._set_row("Blocco app", "Richiede sblocco all'apertura e per dati sensibili.", self._s_lock_enabled))
+        self._s_lock_relock = self._set_combo(
+            [("Ogni accesso", "every_access"), ("Dopo inattività", "idle"), ("Solo manuale", "manual")],
+            current=get_setting("lock_relock", "every_access") or "every_access", width=200)
         lay.addWidget(self._set_row("Ri-blocco", "Quando richiedere di nuovo lo sblocco.", self._s_lock_relock))
+        method = "Sblocco con Windows Hello (volto/impronta/PIN)." if hello else "Sblocco con PIN dell'app."
+        lay.addWidget(self._set_row("PIN di sblocco", method, self._accent_btn("Imposta / cambia PIN", self._change_pin)))
         lay.addStretch()
         return w
 
-    def _build_set_advanced(self, get_setting):
-        w, lay = self._set_body()
-        lay.addWidget(self._set_section("Avanzate", first=True))
-        hint = QLabel("Modelli AI (download), Vision/Ask-Screen, lingua interfaccia e "
-                      "manutenzione restano nella finestra avanzata.")
-        hint.setWordWrap(True); hint.setStyleSheet(f"color:{theme.INK_DIM}; font-size:12px;")
-        lay.addWidget(hint)
-        btn = QPushButton("Apri impostazioni avanzate…"); btn.setFixedHeight(36)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(
-            f"QPushButton{{background:rgba(167,139,250,0.14); color:{theme.VIOLET}; border:1px solid rgba(167,139,250,0.30);"
-            f" border-radius:8px; padding:0 16px; font-family:'{theme.SANS}'; font-size:12px; font-weight:600;}}"
-            "QPushButton:hover{background:rgba(167,139,250,0.24);}")
-        btn.clicked.connect(lambda: self._open_settings("models"))
-        lay.addWidget(btn, alignment=Qt.AlignmentFlag.AlignLeft)
-        lay.addStretch()
-        return w
+    # ── Helper controlli pagina settings ────────────────────────────
+    @staticmethod
+    def _stat_value(value):
+        lb = QLabel(str(value))
+        lb.setStyleSheet(f"color:{theme.INK}; font-size:15px; font-weight:700; background:transparent;")
+        return lb
+
+    def _accent_btn(self, text, slot=None, height=32):
+        b = QPushButton(text); b.setFixedHeight(height); b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setStyleSheet(
+            f"QPushButton{{background:rgba(167,139,250,0.14); color:{theme.VIOLET};"
+            f" border:1px solid rgba(167,139,250,0.30); border-radius:8px; padding:0 14px;"
+            f" font-family:'{theme.SANS}'; font-size:12px; font-weight:600;}}"
+            "QPushButton:hover{background:rgba(167,139,250,0.24);}"
+            "QPushButton:disabled{background:transparent; color:rgba(255,255,255,0.3); border:1px solid rgba(255,255,255,0.08);}")
+        if slot is not None:
+            b.clicked.connect(slot)
+        return b
+
+    def _ghost_btn(self, text, slot=None, height=32):
+        b = QPushButton(text); b.setFixedHeight(height); b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setStyleSheet(
+            f"QPushButton{{background:transparent; color:{theme.INK_SOFT}; border:1px solid {theme.LINE};"
+            f" border-radius:8px; padding:0 14px; font-family:'{theme.SANS}'; font-size:12px;}}"
+            "QPushButton:hover{background:rgba(255,255,255,0.04);}")
+        if slot is not None:
+            b.clicked.connect(slot)
+        return b
+
+    def _preset_chips(self, line_edit, presets):
+        row = QWidget(); row.setStyleSheet("background:transparent;")
+        rl = QHBoxLayout(row); rl.setContentsMargins(2, 0, 2, 0); rl.setSpacing(7)
+        hint = QLabel("Preset:"); hint.setStyleSheet(f"color:{theme.INK_FAINT}; font-size:11px; background:transparent;")
+        rl.addWidget(hint)
+        for name, url in presets:
+            b = QPushButton(name); b.setFixedHeight(26); b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(
+                f"QPushButton{{background:rgba(255,255,255,0.04); color:{theme.INK_SOFT}; border:1px solid {theme.LINE};"
+                f" border-radius:7px; padding:0 11px; font-size:11px;}}"
+                "QPushButton:hover{background:rgba(167,139,250,0.18); color:#fff; border:1px solid rgba(167,139,250,0.4);}")
+            b.clicked.connect(lambda _=False, u=url, le=line_edit: le.setText(u))
+            rl.addWidget(b)
+        rl.addStretch()
+        return row
+
+    def _set_model_combo(self, items, current, width=210):
+        cb = QComboBox(); cb.setEditable(True)
+        for m in items:
+            cb.addItem(m)
+        if current:
+            ix = cb.findText(current)
+            cb.setCurrentIndex(ix) if ix >= 0 else cb.setCurrentText(current)
+        cb.setFixedHeight(32); cb.setMinimumWidth(width)
+        cb.setStyleSheet(
+            f"QComboBox{{background:rgba(255,255,255,0.04); color:{theme.INK}; border:1px solid {theme.LINE};"
+            f" border-radius:8px; padding:0 10px; font-size:12px;}}"
+            f"QComboBox:hover{{border:1px solid rgba(167,139,250,0.4);}}"
+            f"QComboBox::drop-down{{border:none; width:22px;}}"
+            f"QComboBox QAbstractItemView{{background:#1a1a20; color:{theme.INK}; border:1px solid {theme.LINE};"
+            f" selection-background-color:rgba(167,139,250,0.25); outline:none;}}")
+        if cb.lineEdit() is not None:
+            cb.lineEdit().setStyleSheet(f"background:transparent; color:{theme.INK}; border:none;")
+        return cb
+
+    def _combo_with_button(self, combo, btn_text, slot):
+        box = QWidget(); box.setStyleSheet("background:transparent;")
+        bl = QHBoxLayout(box); bl.setContentsMargins(0, 0, 0, 0); bl.setSpacing(8)
+        bl.addWidget(combo, stretch=1)
+        btn = self._accent_btn(btn_text, slot)
+        bl.addWidget(btn)
+        return box, btn
+
+    @staticmethod
+    def _populate_model_combo(combo, ids):
+        cur = combo.currentText().strip()
+        combo.blockSignals(True); combo.clear()
+        for mid in ids:
+            combo.addItem(mid)
+        if cur:
+            ix = combo.findText(cur)
+            combo.setCurrentIndex(ix) if ix >= 0 else combo.setCurrentText(cur)
+        combo.blockSignals(False)
+
+    # ── Azioni settings: region / pin / web host / detect / test ────
+    def _region_text(self):
+        from db import get_setting as _gs
+        raw = _gs("capture_region", "") or ""
+        if raw and raw != "full":
+            try:
+                import json
+                r = json.loads(raw)
+                return f"Area {int(r['width'])}×{int(r['height'])} px"
+            except Exception:
+                pass
+        return "Schermo intero"
+
+    def _choose_region(self):
+        try:
+            from ui.region_select import select_region
+            from db import save_setting
+            self.hide()
+            r = select_region(None)
+            self.show(); self.raise_(); self.activateWindow()
+            if r:
+                import json
+                save_setting("capture_region", json.dumps(r))
+                self._s_region_lbl.setText(self._region_text())
+        except Exception as e:
+            self.toast(f"Selezione area non disponibile: {e}", level="error")
+
+    def _reset_region(self):
+        try:
+            from db import save_setting
+            save_setting("capture_region", "full")
+            self._s_region_lbl.setText(self._region_text())
+        except Exception as e:
+            self.toast(f"Errore reset area: {e}", level="error")
+
+    def _change_pin(self):
+        try:
+            from ui.lock import setup_pin
+            setup_pin(self)
+        except Exception as e:
+            self.toast(f"Impostazione PIN non disponibile: {e}", level="error")
+
+    def _install_web_host(self):
+        try:
+            from modules import web_bridge as _wb
+            from db import save_setting
+            save_setting("web_ext_id", self._s_web_extid.text().strip())
+            ok, msg = _wb.install_native_host()
+            self.toast("Host nativo installato" if ok else f"Installazione fallita: {msg}",
+                       level=("ok" if ok else "error"))
+        except Exception as e:
+            self.toast(f"Errore host nativo: {e}", level="error")
+
+    def _resolved_key(self, typed, getter):
+        """Key digitata, o quella salvata se il campo è vuoto (placeholder)."""
+        if typed:
+            return typed
+        try:
+            return getter().get("api_key", "") or ""
+        except Exception:
+            return ""
+
+    def _ai_detect(self):
+        import config as _cfg
+        base = self._s_ai_url.text().strip() or getattr(_cfg, "AI_BASE_URL_DEFAULT", "")
+        key = self._resolved_key(self._s_ai_key.text().strip(), ai_assistant.get_ai_config)
+        self._s_ai_detect.setEnabled(False); self._s_ai_status.setText("Rilevamento modelli…")
+        from PyQt6.QtWidgets import QApplication; QApplication.processEvents()
+        try:
+            ok, res = ai_assistant.list_models(base_url=base, api_key=key or None)
+        except Exception as e:
+            ok, res = False, str(e)
+        if ok and isinstance(res, list) and res:
+            self._populate_model_combo(self._s_ai_model, res)
+            self._s_ai_status.setText(f"✓ {len(res)} modelli disponibili")
+        else:
+            self._s_ai_status.setText("✗ " + (str(res) if not ok else "nessun modello"))
+        self._s_ai_detect.setEnabled(True)
+
+    def _ai_test(self):
+        from db import save_setting
+        from modules.secrets import protect_secret as _protect
+        try:
+            k = self._s_ai_key.text().strip()
+            if k: save_setting("ai_api_key", _protect(k))
+            save_setting("ai_base_url", self._s_ai_url.text().strip())
+            save_setting("ai_model", self._s_ai_model.currentText().strip())
+        except Exception:
+            pass
+        self._s_ai_status.setText("Test connessione in corso…")
+        from PyQt6.QtWidgets import QApplication; QApplication.processEvents()
+        try:
+            ok, msg = ai_assistant.test_connection()
+        except Exception as e:
+            ok, msg = False, str(e)
+        self._s_ai_status.setText(("✓ " if ok else "✗ ") + str(msg))
+
+    def _vis_detect(self):
+        import config as _cfg
+        from modules import ask_screen as _ask
+        base = self._s_vis_url.text().strip() or getattr(_cfg, "AI_VISION_BASE_URL_DEFAULT", "")
+        key = self._resolved_key(self._s_vis_key.text().strip(), _ask.get_vision_config)
+        self._s_vis_detect.setEnabled(False); self._s_vis_status.setText("Rilevamento modelli…")
+        from PyQt6.QtWidgets import QApplication; QApplication.processEvents()
+        try:
+            ok, res = ai_assistant.list_models(base_url=base, api_key=key or None)
+        except Exception as e:
+            ok, res = False, str(e)
+        if ok and isinstance(res, list) and res:
+            self._populate_model_combo(self._s_vis_model, res)
+            self._s_vis_status.setText(f"✓ {len(res)} modelli disponibili")
+        else:
+            self._s_vis_status.setText("✗ " + (str(res) if not ok else "nessun modello"))
+        self._s_vis_detect.setEnabled(True)
+
+    def _vis_test(self):
+        from db import save_setting
+        from modules.secrets import protect_secret as _protect
+        try:
+            save_setting("ai_vision_enabled", "1" if self._s_vis_enabled.isChecked() else "0")
+            k = self._s_vis_key.text().strip()
+            if k: save_setting("ai_vision_api_key", _protect(k))
+            save_setting("ai_vision_base_url", self._s_vis_url.text().strip())
+            save_setting("ai_vision_model", self._s_vis_model.currentText().strip())
+        except Exception:
+            pass
+        self._s_vis_status.setText("Test Vision in corso…")
+        from PyQt6.QtWidgets import QApplication; QApplication.processEvents()
+        try:
+            from modules import ask_screen as _ask
+            ok, msg = _ask.test_vision_connection()
+        except Exception as e:
+            ok, msg = False, str(e)
+        self._s_vis_status.setText(("✓ " if ok else "✗ ") + str(msg))
+
+    # combo stilizzata come gli altri controlli della pagina settings
+    def _set_combo(self, items, current=None, width=200):
+        cb = QComboBox()
+        for label, data in items:
+            cb.addItem(label, data)
+        if current is not None:
+            ix = cb.findData(current)
+            if ix >= 0:
+                cb.setCurrentIndex(ix)
+        cb.setFixedHeight(32); cb.setMinimumWidth(width)
+        cb.setStyleSheet(
+            f"QComboBox{{background:rgba(255,255,255,0.04); color:{theme.INK}; border:1px solid {theme.LINE};"
+            f" border-radius:8px; padding:0 10px; font-size:12px;}}"
+            f"QComboBox:hover{{border:1px solid rgba(167,139,250,0.4);}}"
+            f"QComboBox::drop-down{{border:none; width:22px;}}"
+            f"QComboBox QAbstractItemView{{background:#1a1a20; color:{theme.INK}; border:1px solid {theme.LINE};"
+            f" selection-background-color:rgba(167,139,250,0.25); outline:none;}}")
+        return cb
+
+    def _adv_model_block(self, parent_lay, title, combo, kind, downloadable=True):
+        """Riga modello: combo + pulsante Scarica + stato cache (porting da SettingsDialog)."""
+        from modules import model_catalog as _mc
+        box = QFrame(); box.setObjectName("frow")
+        box.setStyleSheet(f"QFrame#frow{{border:none; border-bottom:1px solid {theme.LINE};}}"
+                          " QFrame#frow QLabel{border:none; background:transparent;}")
+        v = QVBoxLayout(box); v.setContentsMargins(2, 13, 2, 13); v.setSpacing(8)
+        t = QLabel(title); t.setStyleSheet(f"color:{theme.INK}; font-size:13px; font-weight:500;")
+        v.addWidget(t)
+        row = QHBoxLayout(); row.setSpacing(8)
+        row.addWidget(combo, stretch=1)
+        dl = None
+        if downloadable:
+            dl = QPushButton("Scarica"); dl.setFixedHeight(32); dl.setCursor(Qt.CursorShape.PointingHandCursor)
+            dl.setStyleSheet(
+                f"QPushButton{{background:rgba(167,139,250,0.14); color:{theme.VIOLET};"
+                f" border:1px solid rgba(167,139,250,0.30); border-radius:8px; padding:0 14px;"
+                f" font-family:'{theme.SANS}'; font-size:12px; font-weight:600;}}"
+                "QPushButton:hover{background:rgba(167,139,250,0.24);}"
+                "QPushButton:disabled{background:transparent; color:rgba(255,255,255,0.3); border:1px solid rgba(255,255,255,0.08);}")
+            dl.clicked.connect(lambda _=False, k=kind: self._adv_download(k))
+            row.addWidget(dl)
+        v.addLayout(row)
+        cap = QLabel(""); cap.setWordWrap(True); cap.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11px;")
+        v.addWidget(cap)
+        parent_lay.addWidget(box)
+        catalog = {"embed": _mc.EMBEDDING_MODELS, "whisper": _mc.WHISPER_MODELS, "ocr": _mc.OCR_MODELS}[kind]
+        self._adv_models[kind] = {"combo": combo, "catalog": catalog, "cap": cap, "dl": dl, "is_hf": downloadable}
+        combo.currentIndexChanged.connect(lambda *_: self._adv_refresh_cap(kind))
+        self._adv_refresh_cap(kind)
+
+    def _adv_refresh_cap(self, kind):
+        from modules import model_catalog as mc
+        m = self._adv_models.get(kind)
+        if not m:
+            return
+        combo, catalog, cap, dl, is_hf = m["combo"], m["catalog"], m["cap"], m["dl"], m["is_hf"]
+        mid = combo.currentData() or combo.currentText()
+        meta = mc.find(catalog, mid)
+        note = meta.get("note", "") if meta else "Modello personalizzato"
+        if is_hf:
+            cached = mc.is_cached(mid)
+            status = "scaricato ✓" if cached else "non scaricato"
+            cap.setText(f"{note} — {status}" if note else status)
+            if dl is not None:
+                dl.setEnabled(not cached); dl.setText("Scaricato" if cached else "Scarica")
+        else:
+            installed = mc.ocr_installed(mid) if mid else False
+            size = mc.human_size(meta["size_mb"]) if meta else "?"
+            cap.setText(f"{size} — {'installato ✓' if installed else 'non installato'}")
+
+    def _adv_download(self, kind):
+        m = self._adv_models.get(kind)
+        if not m or not m["is_hf"]:
+            return
+        combo, cap, dl = m["combo"], m["cap"], m["dl"]
+        mid = combo.currentData() or combo.currentText()
+        if not mid:
+            return
+        if dl is not None:
+            dl.setEnabled(False)
+        cap.setText("Scaricamento in corso…")
+        from ui.window import ModelDownloadWorker
+        self._adv_dl_worker = ModelDownloadWorker(kind, mid)
+        self._adv_dl_worker.done.connect(lambda ok, msg, k=kind: self._adv_on_download(k, ok, msg))
+        self._adv_dl_worker.start()
+
+    def _adv_on_download(self, kind, ok, msg):
+        m = self._adv_models.get(kind)
+        if not m:
+            return
+        if ok:
+            self._adv_refresh_cap(kind)
+        else:
+            m["cap"].setText("✗ " + msg)
+            if m["dl"] is not None:
+                m["dl"].setEnabled(True)
 
     def _save_settings(self):
-        from db import save_setting
+        from db import save_setting, get_conn
+        from modules.secrets import protect_secret as _protect
         import config as _cfg
-        errs = 0
-        # Cattura
+        errs = 0; restart_lang = False
+
+        # ── Generale: lingua interfaccia ──
+        try:
+            import i18n
+            lang = self._s_lang.currentData()
+            if lang and lang != self._s_lang_old:
+                i18n.set_language(lang); restart_lang = True
+        except Exception as e:
+            errs += 1; print(f"[Set] lingua: {e}")
+
+        # ── Cattura: toggle, intervalli, dispositivi ──
         try:
             save_setting("capture_screenshots_enabled", "1" if self._s_cap_screens.isChecked() else "0")
             save_setting("capture_audio_enabled", "1" if self._s_cap_audio.isChecked() else "0")
-            raw = self._s_interval.text().strip()
-            if raw:
-                dv = getattr(_cfg, "CAPTURE_INTERVAL", None)
+            for raw, key, attr in ((self._s_interval.text().strip(), "capture_interval", "CAPTURE_INTERVAL"),
+                                   (self._s_audio_chunk.text().strip(), "audio_chunk_seconds", "AUDIO_CHUNK_SECONDS")):
+                if not raw:
+                    continue
+                dv = getattr(_cfg, attr, None)
                 try:
                     val = type(dv)(raw) if dv is not None else raw
-                    save_setting("capture_interval", val); setattr(_cfg, "CAPTURE_INTERVAL", val)
                 except (ValueError, TypeError):
-                    pass
+                    continue
+                save_setting(key, val); setattr(_cfg, attr, val)
+            conn = get_conn(); c = conn.cursor()
+            for key, combo in (("audio_mic_index", self._s_mic), ("audio_out_index", self._s_out)):
+                data = combo.currentData()
+                if data is not None:
+                    c.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", (key, str(data)))
+                else:
+                    c.execute("DELETE FROM settings WHERE key=?", (key,))
+            conn.commit(); conn.close()
             try:
                 from modules.audio import request_restart; request_restart()
             except Exception:
                 pass
         except Exception as e:
             errs += 1; print(f"[Set] cattura: {e}")
-        # Privacy
+
+        # ── Privacy + estensione browser ──
         try:
             save_setting("privacy_redact", "1" if self._s_redact.isChecked() else "0")
             save_setting("privacy_idle_min", str(self._s_idle.value()))
             save_setting("privacy_blocklist", self._s_blocklist.text().strip())
-        except Exception as e:
-            errs += 1; print(f"[Set] privacy: {e}")
-        # Estensione browser
-        try:
+            save_setting("web_ext_id", self._s_web_extid.text().strip())
             from modules import web_bridge as _wb
             _wb.set_enabled(self._s_web_enabled.isChecked())
             _wb.set_excluded_domains(self._s_web_excluded.text().strip())
         except Exception as e:
-            errs += 1; print(f"[Set] web: {e}")
-        # AI
+            errs += 1; print(f"[Set] privacy: {e}")
+
+        # ── Assistente AI ──
         try:
-            from modules.secrets import protect_secret as _protect
             k = self._s_ai_key.text().strip()
             if k:
                 save_setting("ai_api_key", _protect(k))
             save_setting("ai_base_url", self._s_ai_url.text().strip())
-            save_setting("ai_model", self._s_ai_model.text().strip())
+            save_setting("ai_model", self._s_ai_model.currentText().strip())
             save_setting("ai_inline_rag", "1" if self._s_ai_inline.isChecked() else "0")
         except Exception as e:
             errs += 1; print(f"[Set] ai: {e}")
-        # Sicurezza
+
+        # ── Vision (Ask Screen) ──
+        try:
+            save_setting("ai_vision_enabled", "1" if self._s_vis_enabled.isChecked() else "0")
+            vk = self._s_vis_key.text().strip()
+            if vk:
+                save_setting("ai_vision_api_key", _protect(vk))
+            save_setting("ai_vision_base_url", self._s_vis_url.text().strip())
+            save_setting("ai_vision_model", self._s_vis_model.currentText().strip())
+        except Exception as e:
+            errs += 1; print(f"[Set] vision: {e}")
+
+        # ── Modelli locali + soglia audio ──
+        try:
+            emb = self._adv_models["embed"]["combo"]
+            v = emb.currentData() or emb.currentText().strip()
+            if v:
+                save_setting("embedding_model", v); setattr(_cfg, "EMBEDDING_MODEL", v)
+            wsp = self._adv_models["whisper"]["combo"]
+            v = wsp.currentData() or wsp.currentText().strip()
+            if v:
+                save_setting("whisper_model", v); setattr(_cfg, "WHISPER_MODEL", v)
+            save_setting("ocr_lang", self._adv_models["ocr"]["combo"].currentData())
+            sc = self._s_audio_score.value() / 100.0
+            save_setting("audio_min_score", sc); setattr(_cfg, "AUDIO_MIN_SCORE", sc)
+        except Exception as e:
+            errs += 1; print(f"[Set] modelli: {e}")
+
+        # ── Sicurezza ──
         try:
             from modules import applock
             applock.set_lock_enabled(self._s_lock_enabled.isChecked())
             save_setting("lock_relock", self._s_lock_relock.currentData())
         except Exception as e:
             errs += 1; print(f"[Set] sicurezza: {e}")
+
         self.toast("Impostazioni salvate" if not errs else f"Salvate con {errs} errori (vedi log)",
                    level=("ok" if not errs else "error"))
+        if restart_lang:
+            self.toast("Riavvia Déjà per applicare la nuova lingua.", level="info")
 
     # ── Chat / Assistente (orchestrazione portata da window.py) ─────
     def _load_chat_from_db(self):
