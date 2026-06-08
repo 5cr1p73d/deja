@@ -113,8 +113,6 @@ Any OpenAI-compatible service works (OpenAI, OpenRouter, Groq, Together, or self
 |--------|--------|
 | `Ctrl+Shift+D` | Open/close the search overlay |
 | `Ctrl+Shift+A` | Ask Screen — ask the AI what's on screen |
-| `Explore` | Browse the full timeline |
-| `Chat` | Open the AI assistant |
 
 ## Where data is stored
 
