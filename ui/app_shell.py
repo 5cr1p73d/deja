@@ -1072,7 +1072,8 @@ class AppShell(QWidget):
 
     # ── Pagina Assistente ───────────────────────────────────────────
     def _build_assistant_page(self):
-        self.chat_page = ChatPage()
+        # header_right_pad: libera l'angolo in alto a dx dai controlli finestra overlay
+        self.chat_page = ChatPage(header_right_pad=132)
         self.chat_page.send_clicked.connect(self._send_chat_message)
         self.chat_page.new_chat_btn.clicked.connect(self._reset_chat)
         self._chat_history = []
@@ -1941,7 +1942,7 @@ class AppShell(QWidget):
                 container, lbl = self.chat_page.add_assistant("")
                 self._chat_current_bubble = lbl; self._chat_current_container = container
                 self._chat_current_text = ""
-                self._chat_turn_bubbles.append({"container": container, "label": lbl, "text": ""})
+                self._chat_turn_bubbles.append({"container": container, "label": lbl, "text": "", "finalized": False})
             self._chat_current_text += content
             self._chat_current_bubble.setText(self._chat_current_text)
             if self._chat_turn_bubbles:
@@ -1950,6 +1951,10 @@ class AppShell(QWidget):
             self._remove_thinking()
             if self._chat_current_container is not None and self._chat_current_text:
                 self._finalize_bubble(self._chat_current_container, self._chat_current_bubble, self._chat_current_text)
+                # già finalizzato qui: non rifinalizzarlo in _on_chat_done (il container
+                # è stato distrutto → setText su QLabel morto = crash "QLabel deleted").
+                if self._chat_turn_bubbles:
+                    self._chat_turn_bubbles[-1]["finalized"] = True
             self._chat_current_bubble = None; self._chat_current_container = None; self._chat_current_text = ""
             self.chat_page.add_tool(content)
             _, lbl = self.chat_page.add_thinking(); self._chat_thinking = lbl
@@ -1960,8 +1965,9 @@ class AppShell(QWidget):
     def _on_chat_done(self, user_msg):
         self._remove_thinking()
         for b in self._chat_turn_bubbles:
-            if b["text"]:
+            if b["text"] and not b.get("finalized"):
                 self._finalize_bubble(b["container"], b["label"], b["text"])
+                b["finalized"] = True
         full_assistant = "\n\n".join(b["text"] for b in self._chat_turn_bubbles if b["text"])
         self._chat_history.append({"role": "user", "content": user_msg})
         if full_assistant:
@@ -1988,14 +1994,26 @@ class AppShell(QWidget):
         return segs
 
     def _finalize_bubble(self, container, label, raw_text):
+        # Difensivo: container/label possono essere già stati distrutti (es. doppia
+        # finalizzazione dopo un tool-call) → ogni accesso a un QObject morto solleva
+        # "wrapped C/C++ object ... has been deleted". Non deve mai arrivare all'excepthook.
+        try:
+            from PyQt6 import sip
+            if sip.isdeleted(container) or sip.isdeleted(label):
+                return
+        except Exception:
+            pass
         try:
             insert_idx = self.chat_page.msg_layout.indexOf(container)
         except Exception:
             insert_idx = -1
         if insert_idx < 0:
-            clean = _strip_refs(raw_text)
-            label.setTextFormat(Qt.TextFormat.RichText)
-            label.setText(_md_to_html(clean) if clean else " ")
+            try:
+                clean = _strip_refs(raw_text)
+                label.setTextFormat(Qt.TextFormat.RichText)
+                label.setText(_md_to_html(clean) if clean else " ")
+            except (RuntimeError, Exception):
+                pass
             return
         self.chat_page.msg_layout.removeWidget(container)
         container.setParent(None); container.deleteLater()
@@ -2332,14 +2350,49 @@ class AppShell(QWidget):
         return b
 
     def _detail_ask_ai(self):
-        """Apre l'Assistente con una domanda precompilata sul ricordo corrente."""
+        """Apre l'Assistente e invia il ricordo corrente come allegato: riferimento
+        univoco per id ([ss:ID]/[au:ID], così l'AI sa ESATTAMENTE quale ricordo anche
+        se più screenshot hanno lo stesso titolo) + il contenuto reale (testo/trascrizione)."""
         self._switch_page("assistant")
-        try:
-            t = self._detail_title.text()
-            self.chat_page.input.setText(f"Parlami di questo ricordo: «{t}»")
-            self.chat_page.input.setFocus()
-        except Exception:
-            pass
+        r = getattr(self, "_cur_record", {}) or {}
+        kind = getattr(self, "_cur_kind", "")
+        sid = getattr(self, "_cur_sid", None)
+        when = self._detail_when(r.get("ts", "")) if r else ""
+
+        # Costruisci riferimento univoco + contenuto reale del ricordo.
+        if kind == "audio" and sid is not None:
+            ref = f"[au:{sid}]"; what = f"questa registrazione audio del {when}".strip()
+            content = (r.get("transcript") or "").strip()
+        elif kind == "note":
+            ref = ""; what = f"questa pagina web del {when}".strip()
+            content = "\n".join(p for p in (r.get("title"), r.get("url"), r.get("text")) if p).strip()
+        elif kind == "screen" and sid is not None:
+            ref = f"[ss:{sid}]"; what = f"questa schermata del {when}".strip()
+            content = (r.get("text") or "").strip()
+        else:
+            # nessun ricordo selezionato → comportamento minimo
+            try:
+                self.chat_page.input.setFocus()
+            except Exception:
+                pass
+            return
+
+        if len(content) > 4000:
+            content = content[:4000].rstrip() + "…"
+        body = f"\n\nContenuto del ricordo:\n«{content}»" if content else \
+               "\n\n(Questo ricordo non ha testo riconosciuto.)"
+        msg = f"Parlami di {what} {ref}.{body}".strip()
+
+        # Invia subito come allegato. Se l'AI non è configurata, lascia il messaggio
+        # nell'input così l'utente vede cosa verrebbe inviato.
+        if ai_assistant.is_configured():
+            self._send_chat_message(msg)
+        else:
+            self.chat_page.input.setText(msg)
+            try:
+                self.chat_page.input.setFocus()
+            except Exception:
+                pass
 
     def _detail_pin(self):
         """Pin/unpin del ricordo (★) via db.set_pinned."""

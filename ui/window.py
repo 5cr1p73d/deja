@@ -1532,7 +1532,7 @@ class AssistantTurnBubble(QWidget):
 class ChatPage(QWidget):
     send_clicked = pyqtSignal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, header_right_pad=0):
         super().__init__(parent)
         self.setStyleSheet("background:transparent;")
 
@@ -1549,6 +1549,11 @@ class ChatPage(QWidget):
         self.new_chat_btn.setFixedHeight(28); self.new_chat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_chat_btn.setStyleSheet(SS_BTN_OFF)
         head.addWidget(self.new_chat_btn)
+        # Riserva spazio a destra: nell'AppShell i controlli finestra (min/max/chiudi)
+        # galleggiano in alto a destra sopra questa pagina → senza riserva coprono il
+        # bottone "Nuova chat" e lo rendono non cliccabile.
+        if header_right_pad:
+            head.addSpacing(header_right_pad)
         root.addLayout(head)
 
         # Messages scroll area
