@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QFileDialog
-from ui.window import SettingsDialog as AppSettingsDialog, DiaryDialog
+from ui.window import DiaryDialog
 from ui.framed import confirm as _confirm, alert as _alert
 from db import backup_db, restore_db
 from modules import privacy
@@ -225,8 +225,14 @@ class DejaTray(QSystemTrayIcon):
         self._stop_event.set(); self._app.quit()
 
     def _open_settings(self):
-        dlg = AppSettingsDialog(self._window)
-        dlg.select_page("general"); dlg.exec()
+        from modules import applock
+        if not applock.ensure_unlocked(self._window): return
+        self._window.show(); self._window.raise_(); self._window.activateWindow()
+        try:
+            self._window._switch_page("settings")
+            self._window._set_select("general")
+        except Exception:
+            pass
 
     def _open_diary(self):
         from modules import applock

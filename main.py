@@ -55,7 +55,8 @@ except Exception as e:  # OSError/WinError 1114, ImportError, ecc.
 from PyQt6.QtWidgets import QApplication
 from db import init_db, load_settings_into_config, vacuum_db, ensure_encrypted
 from modules import capturer, indexer, audio
-from ui.window import DejaWindow, open_ask_screen_dialog
+from ui.window import open_ask_screen_dialog
+from ui.app_shell import AppShell
 from ui.tray import DejaTray
 from ui.hotkey import HotkeyListener
 
@@ -129,7 +130,6 @@ def main():
     # il browser lancia `deja.exe --web-host`). In dev si usa python sul file.
     if "--web-host" in sys.argv:
         import runpy
-        import paths
         runpy.run_path(
             paths.resource_path(os.path.join("extension", "host", "web_host.py")),
             run_name="__main__",
@@ -197,7 +197,10 @@ def main():
     if not TORCH_AVAILABLE:
         _show_torch_degraded_dialog()
 
-    window = DejaWindow()
+    # Déjà ora è un'APP a finestra (pivot da overlay): si avvia visibile e resta
+    # in taskbar. Il tray sopravvive alla chiusura finestra (riapri da tray/hotkey).
+    window = AppShell()
+    window.show(); window.raise_(); window.activateWindow()
     stop_event = threading.Event()
     tray = DejaTray(window, stop_event, app)
     tray.show()

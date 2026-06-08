@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Déjà — Refined (Raycast × Linear)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* Deja palette — neutral-forward, violet as the single accent */
+    --bg:        #0e0e12;
+    --surface:   #131319;
+    --raise:     #17171e;
+    --sel:       rgba(255,255,255,.055);
+    --ink:       #f3f4f6;
+    --ink-soft:  #9a9aa6;
+    --ink-dim:   #6c6c78;
+    --ink-faint: #4e4e58;
+
+    --violet:    #a78bfa;
+    --amber:     #f59e0b;
+    --emerald:   #10b981;
+    --pink:      #fb7185;
+    --green:     #34d399;
+    --blue:      #60a5fa;
+    --teal:      #5eead4;
+
+    --line:      rgba(255,255,255,.07);
+    --line-soft: rgba(255,255,255,.045);
+    --ease:      cubic-bezier(.22,.61,.36,1);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Geist", sans-serif; color: var(--ink);
+    background:
+      radial-gradient(140% 100% at 50% -20%, #16161d 0%, var(--bg) 50%, #090909 100%);
+    min-height: 100vh; display: grid; place-items: center; overflow: hidden;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+
+  .palette {
+    width: min(620px, 92vw);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px; overflow: hidden;
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,.5),
+      0 1px 0 rgba(255,255,255,.05) inset,
+      0 32px 64px -24px rgba(0,0,0,.85),
+      0 12px 24px -16px rgba(0,0,0,.6);
+    animation: rise .5s var(--ease) both;
+  }
+
+  /* ── search bar ────────────────────────────────── */
+  .bar { display: flex; align-items: center; gap: 13px; padding: 16px 18px; }
+  .ic { width: 19px; height: 19px; flex: none; color: var(--ink-dim); }
+  .input { flex: 1; display: flex; align-items: center; font-size: 17px; font-weight: 400; min-width: 0; }
+  .input .typed { white-space: pre; }
+  .input .ph { color: var(--ink-faint); }
+  .input .cur { width: 1.5px; height: 20px; background: var(--violet); margin-left: 1px;
+                animation: blink 1.1s steps(1) infinite; }
+  .esc { font-family: "Geist Mono"; font-size: 11px; color: var(--ink-dim); flex: none;
+         border: 1px solid var(--line); border-radius: 6px; padding: 3px 7px; background: rgba(255,255,255,.02); }
+
+  /* ── discreet mode segmented ───────────────────── */
+  .seg { display: flex; gap: 2px; padding: 0 18px 12px; }
+  .seg button {
+    font-family: "Geist"; font-size: 12px; font-weight: 500; color: var(--ink-dim); cursor: pointer;
+    background: none; border: none; border-radius: 7px; padding: 5px 11px; transition: all .18s var(--ease);
+  }
+  .seg button:hover { color: var(--ink-soft); background: rgba(255,255,255,.03); }
+  .seg button.on { color: var(--ink); background: var(--raise); box-shadow: 0 0 0 1px var(--line) inset; }
+
+  .sep { height: 1px; background: var(--line-soft); }
+
+  /* ── list ──────────────────────────────────────── */
+  .list { padding: 8px; max-height: 360px; overflow-y: auto; }
+  .list::-webkit-scrollbar { width: 8px; }
+  .list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.06); border-radius: 8px; border: 2px solid var(--surface); }
+
+  .group { font-family: "Geist Mono"; font-size: 10.5px; font-weight: 500; letter-spacing: .08em;
+           text-transform: uppercase; color: var(--ink-faint); padding: 12px 12px 6px; }
+
+  .row {
+    display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 12px;
+    padding: 9px 12px; border-radius: 9px; cursor: pointer; position: relative;
+    opacity: 0; animation: row .42s var(--ease) forwards;
+  }
+  .ava {
+    width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center;
+    font-family: "Geist"; font-size: 12px; font-weight: 600; color: #0e0e12;
+    background: var(--hue); position: relative;
+  }
+  .ava::after { content: ""; position: absolute; inset: 0; border-radius: 7px; box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset; }
+  .mid { min-width: 0; }
+  .mid .ttl { font-size: 14px; font-weight: 500; color: var(--ink); display: flex; align-items: center; gap: 8px; }
+  .mid .ttl .app { color: var(--ink); }
+  .mid .ttl .sub { color: var(--ink-faint); font-weight: 400; font-size: 12.5px; }
+  .mid .prev { font-size: 12.5px; color: var(--ink-dim); margin-top: 2px; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
+  .mid .prev mark { background: none; color: var(--violet); font-weight: 600; }
+  .right { display: flex; align-items: center; gap: 10px; }
+  .right .time { font-family: "Geist Mono"; font-size: 11.5px; color: var(--ink-faint); }
+  .right .go { font-family: "Geist Mono"; font-size: 11px; color: var(--violet); opacity: 0;
+               border: 1px solid rgba(167,139,250,.3); border-radius: 5px; padding: 2px 6px; transition: opacity .18s; }
+
+  .row:hover { background: rgba(255,255,255,.03); }
+  .row.sel { background: var(--sel); box-shadow: 0 0 0 1px var(--line) inset; }
+  .row.sel::before {
+    content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 2px; border-radius: 2px;
+    background: var(--violet); box-shadow: 0 0 10px -1px var(--violet);
+  }
+  .row.sel .go { opacity: 1; }
+
+  /* ── footer action bar (Raycast signature) ─────── */
+  .foot { display: flex; align-items: center; justify-content: space-between;
+          padding: 10px 16px; border-top: 1px solid var(--line); background: var(--bg); }
+  .foot .brand { display: flex; align-items: center; gap: 9px; font-size: 12.5px; font-weight: 500; color: var(--ink-soft); }
+  .foot .brand .logo { width: 17px; height: 17px; border-radius: 5px;
+                       background: linear-gradient(140deg, var(--violet), var(--blue)); }
+  .foot .acts { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-dim); }
+  .foot .acts .a { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 7px; }
+  .foot .acts .a:hover { background: rgba(255,255,255,.04); color: var(--ink-soft); }
+  .foot .acts .div { width: 1px; height: 16px; background: var(--line); }
+  .key { font-family: "Geist Mono"; font-size: 10.5px; color: var(--ink-soft);
+         background: var(--raise); border: 1px solid var(--line); border-radius: 5px;
+         min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 4px; }
+
+  @keyframes rise  { from { opacity: 0; transform: translateY(12px) scale(.99); } to { opacity: 1; transform: none; } }
+  @keyframes row   { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes blink { 0%,50% { opacity: 1; } 50.01%,100% { opacity: 0; } }
+  .row:nth-child(2){animation-delay:.04s}.row:nth-child(3){animation-delay:.08s}.row:nth-child(4){animation-delay:.12s}
+  .row:nth-child(6){animation-delay:.18s}.row:nth-child(7){animation-delay:.22s}
+</style>
+</head>
+<body>
+  <div class="palette">
+    <!-- search -->
+    <div class="bar">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+      </svg>
+      <div class="input"><span class="typed" id="typed"></span><span class="cur"></span></div>
+      <span class="esc">esc</span>
+    </div>
+
+    <div class="seg">
+      <button class="on">Ricerca</button>
+      <button>Chiedi</button>
+      <button>Cronologia</button>
+    </div>
+
+    <div class="sep"></div>
+
+    <!-- list -->
+    <div class="list" id="list">
+      <div class="group">Oggi</div>
+
+      <div class="row sel" style="--hue:var(--pink)">
+        <div class="ava">F</div>
+        <div class="mid">
+          <div class="ttl"><span class="app">Figma</span><span class="sub">Mockup overlay</span></div>
+          <div class="prev">barra <mark>ricerca</mark> espansa · token, spaziatura, selezione</div>
+        </div>
+        <div class="right"><span class="go">apri ↵</span><span class="time">14:32</span></div>
+      </div>
+
+      <div class="row" style="--hue:var(--green)">
+        <div class="ava">S</div>
+        <div class="mid">
+          <div class="ttl"><span class="app">Slack</span><span class="sub">#design</span></div>
+          <div class="prev">“…portiamo il <mark>design</mark> alla qualità Raycast anche nell'app”</div>
+        </div>
+        <div class="right"><span class="go">apri ↵</span><span class="time">11:08</span></div>
+      </div>
+
+      <div class="row" style="--hue:var(--blue)">
+        <div class="ava">M</div>
+        <div class="mid">
+          <div class="ttl"><span class="app">Mail</span><span class="sub">da Giulia</span></div>
+          <div class="prev">Re: revisione <mark>design</mark> — feedback in allegato</div>
+        </div>
+        <div class="right"><span class="go">apri ↵</span><span class="time">09:41</span></div>
+      </div>
+
+      <div class="group">Ieri</div>
+
+      <div class="row" style="--hue:var(--teal)">
+        <div class="ava">Z</div>
+        <div class="mid">
+          <div class="ttl"><span class="app">Zoom</span><span class="sub">trascrizione</span></div>
+          <div class="prev">riunione <mark>design</mark> — note &amp; audio indicizzato (42 min)</div>
+        </div>
+        <div class="right"><span class="go">apri ↵</span><span class="time">16:00</span></div>
+      </div>
+
+      <div class="row" style="--hue:var(--amber)">
+        <div class="ava">C</div>
+        <div class="mid">
+          <div class="ttl"><span class="app">VS Code</span><span class="sub">ui/window.py</span></div>
+          <div class="prev">refactor <mark>design</mark> tokens → ui/theme.py</div>
+        </div>
+        <div class="right"><span class="go">apri ↵</span><span class="time">15:12</span></div>
+      </div>
+    </div>
+
+    <!-- footer action bar -->
+    <div class="foot">
+      <div class="brand"><span class="logo"></span>Déjà</div>
+      <div class="acts">
+        <span class="a">Apri <span class="key">↵</span></span>
+        <span class="div"></span>
+        <span class="a">Azioni <span class="key">⌘</span><span class="key">K</span></span>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const target = "design", el = document.getElementById("typed");
+  let i = 0;
+  (function type(){ if (i <= target.length){ el.textContent = target.slice(0,i++); setTimeout(type, 130);} })();
+
+  /* arrow-key selection — the Raycast feel */
+  const rows = [...document.querySelectorAll(".row")];
+  let sel = 0;
+  function setSel(n){ rows[sel].classList.remove("sel"); sel = (n + rows.length) % rows.length;
+    rows[sel].classList.add("sel"); rows[sel].scrollIntoView({block:"nearest"}); }
+  addEventListener("keydown", e => {
+    if (e.key === "ArrowDown"){ e.preventDefault(); setSel(sel+1); }
+    if (e.key === "ArrowUp"){ e.preventDefault(); setSel(sel-1); }
+  });
+  rows.forEach((r,n) => r.addEventListener("mousemove", () => { if (sel!==n) setSel(n); }));
+
+  document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll(".seg button").forEach(x => x.classList.remove("on")); b.classList.add("on");
+  }));
+</script>
+</body>
+</html>

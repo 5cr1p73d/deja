@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Déjà — App</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#0d0d11;--bg2:#09090c;--panel:#141419;--raise:#1c1c24;
+    --ink:#f1f1f3;--soft:#9b9ba4;--dim:#6a6a74;--faint:#474750;
+    --violet:#a78bfa;--amber:#f59e0b;--emerald:#10b981;--blue:#60a5fa;--pink:#fb7185;
+    --line:rgba(255,255,255,.06);--line2:rgba(255,255,255,.10);
+    --ease:cubic-bezier(.22,.61,.36,1);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{font-family:"Geist",sans-serif;color:var(--ink);background:var(--bg2);
+    display:grid;place-items:center;overflow:hidden;-webkit-font-smoothing:antialiased}
+  .app{width:min(1180px,96vw);height:min(740px,94vh);
+    background:linear-gradient(180deg,#101014,#0b0b0e);
+    border:1px solid var(--line2);border-radius:14px;overflow:hidden;
+    display:grid;grid-template-columns:226px minmax(0,1fr);box-shadow:0 40px 120px -44px #000}
+
+  /* ── SIDEBAR ── */
+  .side{display:flex;flex-direction:column;padding:16px 12px;border-right:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 20px}
+  .brand .logo{width:28px;height:28px;border-radius:8px;flex:none;position:relative;
+    background:#15151b;border:1px solid var(--line2);display:grid;place-items:center}
+  .brand .logo::before{content:"";width:13px;height:13px;border-radius:50%;border:1.5px solid var(--violet);border-top-color:transparent;transform:rotate(-30deg)}
+  .brand .logo::after{content:"";position:absolute;width:3px;height:3px;border-radius:50%;background:var(--violet)}
+  .brand b{font-size:17px;font-weight:600;letter-spacing:-.01em}
+  .navlbl{font-family:"Geist Mono";font-size:9px;letter-spacing:.16em;color:var(--faint);text-transform:uppercase;padding:12px 10px 7px}
+  .nav{display:flex;flex-direction:column;gap:1px}
+  .nav a{display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;color:var(--soft);
+    font-size:13px;font-weight:500;cursor:pointer;transition:all .15s var(--ease);position:relative}
+  .nav a svg{width:17px;height:17px;flex:none;stroke-width:1.7}
+  .nav a:hover{background:rgba(255,255,255,.035);color:var(--ink)}
+  .nav a.on{color:var(--ink);background:rgba(255,255,255,.05)}
+  .nav a.on::before{content:"";position:absolute;left:-12px;top:8px;bottom:8px;width:2.5px;border-radius:2px;background:var(--violet)}
+  .side .spacer{flex:1}
+  .status{padding:10px 12px;border:1px solid var(--line);border-radius:10px;margin-bottom:10px}
+  .status .r{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--soft)}
+  .status .r+.r{margin-top:7px}
+  .status .dot{display:inline-flex;align-items:center;gap:6px}
+  .status .dot i{width:6px;height:6px;border-radius:50%;background:var(--emerald);box-shadow:0 0 6px var(--emerald)}
+  .status .meter{height:4px;border-radius:2px;background:rgba(255,255,255,.07);margin-top:9px;overflow:hidden}
+  .status .meter i{display:block;height:100%;width:38%;background:var(--soft);border-radius:2px}
+  .me{display:flex;align-items:center;gap:10px;padding:6px 8px}
+  .me .av{width:28px;height:28px;border-radius:8px;background:#22222b;border:1px solid var(--line2);flex:none;display:grid;place-items:center;font-size:12px;font-weight:600;color:var(--soft)}
+  .me .n{font-size:12.5px;font-weight:600}.me .h{font-size:10.5px;color:var(--dim)}
+
+  /* ── CONTENT (pagina) ── */
+  #content{min-width:0;display:grid}
+  .page-timeline{grid-template-columns:minmax(0,1fr) 366px}
+  .page-2col{grid-template-columns:minmax(0,1fr) 300px}
+  .page-1col{grid-template-columns:minmax(0,1fr)}
+
+  .main{display:flex;flex-direction:column;min-width:0}
+  .top{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}
+  .ptitle{font-size:16px;font-weight:600}
+  .search{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:9px;background:rgba(255,255,255,.035);
+    border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+  .search svg{width:15px;height:15px;color:var(--dim);flex:none}
+  .search input{flex:1;min-width:0;background:none;border:none;outline:none;color:var(--ink);font-family:"Geist";font-size:13px}
+  .search .k{font-family:"Geist Mono";font-size:10px;color:var(--dim);border:1px solid var(--line);border-radius:5px;padding:2px 6px;flex:none}
+  .seg{display:flex;gap:3px;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:9px;padding:3px;flex:none}
+  .seg button{display:flex;align-items:center;gap:6px;font-family:"Geist";font-size:12px;font-weight:500;color:var(--soft);
+    background:none;border:none;border-radius:6px;padding:6px 11px;cursor:pointer;white-space:nowrap}
+  .seg button.on{color:var(--ink);background:var(--raise)}
+  .seg button .d{width:6px;height:6px;border-radius:50%}
+  .canvas{flex:1;overflow-y:auto;padding:18px 24px 28px}
+  .canvas::-webkit-scrollbar,.dbody::-webkit-scrollbar{width:9px}
+  .canvas::-webkit-scrollbar-thumb,.dbody::-webkit-scrollbar-thumb{background:rgba(255,255,255,.06);border-radius:8px;border:2px solid transparent;background-clip:content-box}
+
+  /* timeline */
+  .daydiv{display:flex;align-items:baseline;gap:12px;margin:4px 0 16px}
+  .daydiv b{font-size:15px;font-weight:600}.daydiv span{font-family:"Geist Mono";font-size:11px;color:var(--dim)}
+  .feed{position:relative;padding-left:26px}
+  .feed::before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:1.5px;background:linear-gradient(var(--line2) 0 94%,transparent)}
+  .hourlbl{font-family:"Geist Mono";font-size:10px;color:var(--faint);letter-spacing:.1em;padding:13px 0 6px 4px}
+  .hourlbl:first-child{padding-top:0}
+  .row{position:relative;display:grid;grid-template-columns:74px 1fr auto;align-items:center;gap:13px;padding:9px 13px;border-radius:11px;cursor:pointer;margin-bottom:2px;transition:background .15s var(--ease)}
+  .row::before{content:"";position:absolute;left:-21.5px;top:50%;transform:translateY(-50%);width:8px;height:8px;border-radius:50%;background:var(--hue);box-shadow:0 0 0 3px var(--bg)}
+  .row:hover{background:rgba(255,255,255,.035)}
+  .row.sel{background:rgba(255,255,255,.05)}
+  .row.sel::after{content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;border-radius:2px;background:var(--hue);box-shadow:0 0 8px var(--hue)}
+  .media{width:74px;height:50px;border-radius:8px;overflow:hidden;position:relative;border:1px solid var(--line2);background:#0c0c10}
+  .media .ic{position:absolute;inset:0;display:grid;place-items:center}
+  .media .ic svg{width:18px;height:18px;color:var(--hue);stroke-width:1.7}
+  .media .src{position:absolute;right:3px;bottom:3px;width:9px;height:9px;border-radius:50%;background:var(--bg);display:grid;place-items:center}
+  .media .src i{width:4px;height:4px;border-radius:1px;background:var(--hue)}
+  .mid{min-width:0}.mid .t{font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mid .s{font-size:12px;color:var(--dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .right .clk{font-family:"Geist Mono";font-size:11px;color:var(--dim)}
+
+  /* mock screenshot */
+  .shot{position:absolute;inset:0}
+  .shot.wall{background:linear-gradient(160deg,#3a2d5e,#5a4a7a 30%,#caa0c0 60%,#3a2540)}
+  .shot.wall::after{content:"";position:absolute;left:24%;top:30%;width:52%;height:48%;border-radius:2px;background:#14141a;box-shadow:0 2px 6px rgba(0,0,0,.5);border-top:3px solid #2a2a36}
+  .shot.code{background:#0e1320}
+  .shot.code::before{content:"";position:absolute;left:0;top:0;width:30%;height:100%;background:#0b0f18}
+  .shot.code::after{content:"";position:absolute;left:36%;right:8%;top:18%;height:3px;border-radius:2px;background:var(--blue);box-shadow:0 7px 0 #2a3550,0 14px 0 #2a3550,0 21px 0 var(--emerald),0 28px 0 #2a3550}
+  .shot.term{background:#0a0a0c}
+  .shot.term::after{content:"";position:absolute;left:10%;right:10%;top:22%;height:2px;background:var(--emerald);opacity:.7;box-shadow:0 6px 0 rgba(255,255,255,.18),0 12px 0 rgba(255,255,255,.18),0 18px 0 var(--amber),0 24px 0 rgba(255,255,255,.12)}
+  .shot.browser{background:#15151c}
+  .shot.browser::before{content:"";position:absolute;left:0;top:0;right:0;height:30%;background:#1f1f29;border-bottom:1px solid #2a2a36}
+  .shot.browser::after{content:"";position:absolute;left:10%;right:30%;top:46%;height:3px;border-radius:2px;background:var(--soft);opacity:.4;box-shadow:0 7px 0 rgba(255,255,255,.14),0 14px 0 rgba(255,255,255,.1)}
+
+  /* ── DETAIL ── */
+  .detail{border-left:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+  .dhead{padding:15px 18px;border-bottom:1px solid var(--line)}
+  .dhead .k{display:flex;align-items:center;gap:9px}
+  .dhead .badge{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;flex:none}
+  .dhead .badge svg{width:15px;height:15px}
+  .badge.sc{background:rgba(16,185,129,.14);border:1px solid rgba(16,185,129,.3)} .badge.sc svg{color:var(--emerald)}
+  .badge.nt{background:rgba(167,139,250,.14);border:1px solid rgba(167,139,250,.3)} .badge.nt svg{color:var(--violet)}
+  .badge.au{background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.3)} .badge.au svg{color:var(--amber)}
+  .dhead .t{font-size:14px;font-weight:600}
+  .dhead .sub{font-family:"Geist Mono";font-size:10px;letter-spacing:.12em;color:var(--dim);text-transform:uppercase;margin:5px 0 0 35px}
+  .dbody{flex:1;overflow-y:auto;padding:16px}
+  .shotbig{height:230px;border-radius:12px;overflow:hidden;position:relative;border:1px solid var(--line2);margin-bottom:14px}
+  .acts{display:flex;gap:7px;margin-bottom:18px}
+  .acts button{font-family:"Geist";font-size:12px;font-weight:500;color:var(--soft);background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:9px;padding:8px 12px;cursor:pointer;transition:all .15s}
+  .acts button:hover{background:rgba(255,255,255,.08);color:var(--ink)}
+  .acts button.pri{background:rgba(167,139,250,.16);border-color:rgba(167,139,250,.4);color:var(--ink);font-weight:600}
+  .acts button.ico{margin-left:auto;width:36px;padding:0;display:grid;place-items:center}
+  .ctxlbl{font-family:"Geist Mono";font-size:9.5px;letter-spacing:.14em;color:var(--faint);text-transform:uppercase;margin:0 0 8px}
+  .ctx{display:flex;flex-wrap:wrap;gap:7px}
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--soft);background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:999px;padding:4px 10px}
+  .chip i{width:6px;height:6px;border-radius:50%}
+  .notebody{font-size:15px;line-height:1.62;color:var(--ink);font-weight:300;margin-bottom:18px}
+  .player{background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:14px}
+  .player .wave{display:flex;align-items:flex-end;gap:2px;height:46px;margin-bottom:14px}
+  .player .wave i{flex:1;background:var(--amber);border-radius:1px;opacity:.85}
+  .player .ctr{display:flex;align-items:center;gap:18px;justify-content:center;color:var(--soft)}
+  .player .ctr .play{width:38px;height:38px;border-radius:50%;background:var(--amber);color:#1a1206;display:grid;place-items:center}
+  .player .ctr svg{width:16px;height:16px}
+  .player .bar{height:3px;background:rgba(255,255,255,.08);border-radius:2px;margin:13px 0 6px;position:relative}
+  .player .bar::after{content:"";position:absolute;left:0;top:0;bottom:0;width:62%;background:var(--amber);border-radius:2px}
+  .player .tm{display:flex;justify-content:space-between;font-family:"Geist Mono";font-size:10.5px;color:var(--dim)}
+  .tsearch{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:9px;padding:8px 11px;margin:14px 0 12px}
+  .tsearch svg{width:14px;height:14px;color:var(--dim)}.tsearch input{flex:1;background:none;border:none;outline:none;color:var(--ink);font-size:12px;font-family:"Geist"}
+  .script{display:flex;flex-direction:column;gap:13px}
+  .line .who{font-size:12px;font-weight:600;margin-bottom:3px}.line .who.a{color:var(--amber)}.line .who.b{color:var(--violet)}
+  .line .tx{font-size:12.5px;line-height:1.55;color:var(--soft)}.line .tx .ts{font-family:"Geist Mono";font-size:10.5px;color:var(--dim);margin-right:5px}
+
+  /* ── CHAT (Assistente) ── */
+  .chat{flex:1;overflow-y:auto;padding:24px 28px;display:flex;flex-direction:column;gap:20px}
+  .chat::-webkit-scrollbar{width:9px}.chat::-webkit-scrollbar-thumb{background:rgba(255,255,255,.06);border-radius:8px;border:2px solid transparent;background-clip:content-box}
+  .msg{max-width:78%;display:flex;flex-direction:column;gap:7px}
+  .msg.u{align-self:flex-end;align-items:flex-end}
+  .msg .bub{padding:12px 15px;border-radius:14px;font-size:13.5px;line-height:1.55}
+  .msg.u .bub{background:rgba(167,139,250,.14);border:1px solid rgba(167,139,250,.28);color:var(--ink);border-bottom-right-radius:5px}
+  .msg.a .bub{background:var(--panel);border:1px solid var(--line);color:var(--soft);border-bottom-left-radius:5px}
+  .msg.a .bub b{color:var(--ink);font-weight:600}
+  .msg .who{font-family:"Geist Mono";font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  .msg.a .who{color:var(--violet)}
+  .cites{display:flex;gap:7px;flex-wrap:wrap;margin-top:2px}
+  .cite{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--soft);background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:8px;padding:4px 9px;cursor:pointer}
+  .cite:hover{background:rgba(255,255,255,.07);color:var(--ink)}
+  .cite i{width:7px;height:7px;border-radius:2px}
+  .composer{padding:14px 20px 18px;border-top:1px solid var(--line)}
+  .composer .box{display:flex;align-items:center;gap:10px;background:var(--panel);border:1px solid var(--line2);border-radius:14px;padding:8px 8px 8px 14px}
+  .composer input{flex:1;background:none;border:none;outline:none;color:var(--ink);font-family:"Geist";font-size:14px}
+  .composer .mic,.composer .send{width:36px;height:36px;border-radius:10px;border:none;cursor:pointer;display:grid;place-items:center}
+  .composer .mic{background:rgba(255,255,255,.05);color:var(--soft)}
+  .composer .send{background:var(--violet);color:#1a1430}
+  .composer .mic svg,.composer .send svg{width:17px;height:17px}
+  .composer .hint{font-size:10.5px;color:var(--faint);text-align:center;margin-top:8px}
+
+  /* sources panel (assistente dx) */
+  .srcs{border-left:1px solid var(--line);padding:16px;overflow-y:auto}
+  .srcs h5{font-family:"Geist Mono";font-size:9.5px;letter-spacing:.14em;color:var(--faint);text-transform:uppercase;margin-bottom:12px}
+  .srccard{display:flex;gap:10px;align-items:center;padding:9px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer;transition:all .15s}
+  .srccard:hover{background:rgba(255,255,255,.03);border-color:var(--line2)}
+  .srccard .m{width:46px;height:32px;border-radius:6px;overflow:hidden;position:relative;border:1px solid var(--line2);flex:none}
+  .srccard .tt{font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .srccard .ss{font-size:10.5px;color:var(--dim);font-family:"Geist Mono"}
+
+  /* ── SETTINGS ── */
+  .setwrap{display:grid;grid-template-columns:186px 1fr;height:100%;min-width:0}
+  .setnav{border-right:1px solid var(--line);padding:18px 10px;overflow-y:auto}
+  .setnav a{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:8px;color:var(--soft);font-size:13px;font-weight:500;cursor:pointer;transition:all .15s}
+  .setnav a svg{width:16px;height:16px;stroke-width:1.7}
+  .setnav a:hover{background:rgba(255,255,255,.035);color:var(--ink)}
+  .setnav a.on{background:rgba(255,255,255,.05);color:var(--ink)}
+  .setcontent{overflow-y:auto;padding:26px 32px}
+  .setcontent::-webkit-scrollbar{width:9px}.setcontent::-webkit-scrollbar-thumb{background:rgba(255,255,255,.06);border-radius:8px;border:2px solid transparent;background-clip:content-box}
+  .seclbl{font-family:"Geist Mono";font-size:10px;letter-spacing:.16em;color:var(--faint);text-transform:uppercase;margin:0 0 18px}
+  .seclbl+.seclbl,.frow+.seclbl{margin-top:30px}
+  .frow{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:13px 0;border-bottom:1px solid var(--line)}
+  .frow .l .t{font-size:13.5px;font-weight:500}.frow .l .d{font-size:11.5px;color:var(--dim);margin-top:3px;max-width:380px}
+  .sw{width:42px;height:24px;border-radius:999px;background:rgba(255,255,255,.08);border:1px solid var(--line2);position:relative;cursor:pointer;flex:none;transition:all .2s}
+  .sw::after{content:"";position:absolute;left:2px;top:2px;width:18px;height:18px;border-radius:50%;background:var(--soft);transition:all .2s var(--ease)}
+  .sw.on{background:var(--violet);border-color:var(--violet)}.sw.on::after{left:20px;background:#fff}
+  .fin{background:rgba(255,255,255,.035);border:1px solid var(--line);border-radius:9px;padding:9px 12px;color:var(--ink);font-family:"Geist";font-size:13px;outline:none;min-width:180px}
+  .fsel{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.035);border:1px solid var(--line);border-radius:9px;padding:9px 12px;color:var(--ink);font-size:13px;cursor:pointer}
+  .fsel svg{width:13px;height:13px;color:var(--dim)}
+  .setfoot{display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--line)}
+  .btn{font-family:"Geist";font-size:13px;font-weight:500;border-radius:10px;padding:9px 18px;cursor:pointer;border:1px solid var(--line2);background:rgba(255,255,255,.04);color:var(--ink)}
+  .btn.pri{background:var(--violet);border-color:var(--violet);color:#1a1430;font-weight:600}
+
+  /* ── GALLERY ── */
+  .gallery{flex:1;overflow-y:auto;padding:18px 24px 28px}
+  .gallery::-webkit-scrollbar{width:9px}.gallery::-webkit-scrollbar-thumb{background:rgba(255,255,255,.06);border-radius:8px;border:2px solid transparent;background-clip:content-box}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+  .tile{aspect-ratio:16/10;border-radius:10px;overflow:hidden;position:relative;border:1px solid var(--line2);cursor:pointer;transition:all .18s var(--ease)}
+  .tile:hover{transform:translateY(-2px);border-color:var(--line2);box-shadow:0 12px 30px -16px #000}
+  .tile .cap{position:absolute;left:0;right:0;bottom:0;padding:14px 9px 7px;font-size:11px;color:#fff;
+    background:linear-gradient(transparent,rgba(0,0,0,.72));display:flex;justify-content:space-between}
+  .tile .cap .ap{font-weight:600}.tile .cap .tm{font-family:"Geist Mono";opacity:.8}
+
+  /* ── SEARCH ── */
+  .sbar{display:flex;align-items:center;justify-content:space-between;margin:2px 0 12px}
+  .sbar .cnt{font-size:13px;color:var(--soft)} .sbar .cnt b{color:var(--ink);font-weight:600}
+  .sbar .sort{font-family:"Geist Mono";font-size:11px;color:var(--dim);display:flex;align-items:center;gap:6px;cursor:pointer}
+  .sbar .sort svg{width:12px;height:12px}
+  .sres{display:grid;grid-template-columns:74px 1fr auto;gap:13px;align-items:center;padding:11px 13px;border-radius:11px;cursor:pointer;transition:background .15s var(--ease)}
+  .sres:hover{background:rgba(255,255,255,.035)} .sres.sel{background:rgba(255,255,255,.05);box-shadow:inset 0 0 0 1px var(--line)}
+  .sres .t{font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sres .sn{font-size:12px;color:var(--dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sres .sn mark{background:none;color:var(--violet);font-weight:600}
+  .sres .when{font-family:"Geist Mono";font-size:11px;color:var(--dim);text-align:right;white-space:nowrap}
+  .sres .rel{display:flex;align-items:center;gap:6px;justify-content:flex-end;margin-top:6px}
+  .sres .rel .bb{width:34px;height:3px;border-radius:2px;background:rgba(255,255,255,.1);overflow:hidden}
+  .sres .rel .bb i{display:block;height:100%;background:var(--violet)}
+  .sres .rel .pc{font-family:"Geist Mono";font-size:10px;color:var(--dim)}
+
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  #content>*{animation:fade .25s var(--ease)}
+</style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand"><span class="logo"></span><b>Déjà</b></div>
+      <div class="navlbl">Menu</div>
+      <nav class="nav" id="nav">
+        <a data-p="timeline" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Timeline</a>
+        <a data-p="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>Cerca</a>
+        <a data-p="assistant"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Assistente</a>
+        <a data-p="gallery"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18"/></svg>Galleria</a>
+      </nav>
+      <div class="navlbl">Gestione</div>
+      <nav class="nav" id="nav2">
+        <a data-p="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8 2 2 0 1 1-2.8 2.8 1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0 1.6 1.6 0 0 0-2.7-1.1 2 2 0 1 1-2.8-2.8A1.6 1.6 0 0 0 4.6 15a2 2 0 1 1 0-4 1.6 1.6 0 0 0 1.1-2.7 2 2 0 1 1 2.8-2.8A1.6 1.6 0 0 0 11 4.6 2 2 0 1 1 15 4.6a1.6 1.6 0 0 0 2.7 1.1 2 2 0 1 1 2.8 2.8A1.6 1.6 0 0 0 19.4 11a2 2 0 1 1 0 4z"/></svg>Impostazioni</a>
+        <a data-p="info"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg>Info & Privacy</a>
+      </nav>
+      <div class="spacer"></div>
+      <div class="status">
+        <div class="r"><span class="dot"><i></i>Cattura attiva</span><span style="font-family:'Geist Mono';color:var(--dim)">5s</span></div>
+        <div class="r"><span>Archivio</span><span style="font-family:'Geist Mono';color:var(--soft)">1,1 GB</span></div>
+        <div class="meter"><i></i></div>
+      </div>
+      <div class="me"><span class="av">R</span><div><div class="n">Robert</div><div class="h">locale · cifrato</div></div></div>
+    </aside>
+
+    <div id="content"></div>
+  </div>
+
+<script>
+  const content = document.getElementById('content');
+  const monitor='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 20h8"/></svg>';
+  const noteIc='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 6h16M4 12h16M4 18h10"/></svg>';
+  const micIc='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+  const sendIc='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 11l18-8-8 18-2-7-8-3z"/></svg>';
+  const srch='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>';
+
+  /* ── TIMELINE PAGE ── */
+  const EVENTS=[
+    {kind:'code',title:'VS Code — window.py',sub:'refactor delegate · timeline',time:'17:05',shot:'code',hue:'var(--blue)',hour:'17:00'},
+    {kind:'note',title:'Nota — Slack #design',sub:'“…Déjà a timeline piena, niente overlay”',time:'16:42',hue:'var(--violet)',note:'“…portiamo Déjà a timeline piena, niente più overlay. Sidebar a sinistra, dettaglio a destra, come Chronos. E meno effetti, più sobrio.”',hour:'16:00'},
+    {kind:'audio',title:'Team Sync — Zoom',sub:'registrazione 45:12 · trascritta',time:'16:30',hue:'var(--amber)'},
+    {kind:'screen',title:'Design Session — Figma',sub:'overlay timeline mockup',time:'15:42',shot:'wall',hue:'var(--emerald)',hour:'15:00'},
+    {kind:'screen',title:'Chrome — reference UI',sub:'dribbble · dashboard timeline',time:'15:18',shot:'browser',hue:'var(--emerald)'},
+    {kind:'screen',title:'PowerShell — build',sub:'pyinstaller · deja 1.1.0',time:'15:02',shot:'term',hue:'var(--emerald)'},
+  ];
+  function mediaHTML(e){
+    if(e.kind==='audio') return `<div class="media"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v18M7 8v8M17 8v8M3 11v2M21 11v2"/></svg></span><span class="src"><i></i></span></div>`;
+    if(e.kind==='note')  return `<div class="media"><span class="ic">${noteIc}</span><span class="src"><i></i></span></div>`;
+    return `<div class="media"><span class="shot ${e.shot}"></span><span class="src"><i></i></span></div>`;
+  }
+  function pageTimeline(){
+    let feed='';let lastHour=null;
+    EVENTS.forEach((e,i)=>{
+      if(e.hour&&e.hour!==lastHour){feed+=`<div class="hourlbl">${e.hour}</div>`;lastHour=e.hour;}
+      feed+=`<div class="row" data-i="${i}" style="--hue:${e.hue}">${mediaHTML(e)}
+        <div class="mid"><div class="t">${e.title}</div><div class="s">${e.sub}</div></div>
+        <div class="right"><span class="clk">${e.time}</span></div></div>`;
+    });
+    content.className='page-timeline';
+    content.innerHTML=`
+      <main class="main">
+        <div class="top">
+          <div class="search">${srch}<input placeholder="Cerca nei tuoi ricordi…"><span class="k">⌘K</span></div>
+          <div class="seg"><button class="on">Tutto</button><button><span class="d" style="background:var(--emerald)"></span>Schermo</button><button><span class="d" style="background:var(--amber)"></span>Audio</button></div>
+        </div>
+        <div class="canvas"><div class="daydiv"><b>Oggi</b><span>6 giugno 2026 · 3.000 ricordi</span></div><div class="feed">${feed}</div></div>
+      </main>
+      <aside class="detail" id="detail"></aside>`;
+    const rows=[...content.querySelectorAll('.row')];
+    rows.forEach(r=>r.addEventListener('click',()=>{rows.forEach(x=>x.classList.remove('sel'));r.classList.add('sel');renderDetail(+r.dataset.i);}));
+    rows[3].classList.add('sel');renderDetail(3);
+  }
+  function detailHTML(e){
+    if(e.kind==='audio') return audioDetail();
+    const when=e.when||('oggi '+e.time);
+    if(e.kind==='note') return `
+      <div class="dhead"><div class="k"><span class="badge nt">${noteIc}</span><span class="t">${e.title}</span></div><div class="sub">Nota · ${when}</div></div>
+      <div class="dbody"><div class="notebody">${e.note||e.sub}</div>
+        <div class="acts"><button class="pri">Apri origine</button><button>Chiedi all'AI</button><button class="ico">★</button></div>
+        <div class="ctxlbl">Intorno a questo momento</div>
+        <div class="ctx"><span class="chip"><i style="background:var(--emerald)"></i>schermo · 16:41</span><span class="chip"><i style="background:var(--amber)"></i>audio · 16:30</span></div>
+      </div>`;
+    // SCREENSHOT — niente OCR (sporco)
+    return `
+      <div class="dhead"><div class="k"><span class="badge sc">${monitor}</span><span class="t">${e.title}</span></div><div class="sub">Schermo · ${when}</div></div>
+      <div class="dbody"><div class="shotbig"><span class="shot ${e.shot}"></span></div>
+        <div class="acts"><button class="pri">Apri</button><button>Chiedi all'AI</button><button>± 5 min</button><button class="ico">★</button></div>
+        <div class="ctxlbl">Intorno a questo momento</div>
+        <div class="ctx"><span class="chip"><i style="background:var(--amber)"></i>audio</span><span class="chip"><i style="background:var(--emerald)"></i>schermo</span><span class="chip"><i style="background:var(--blue)"></i>Chrome</span></div>
+      </div>`;
+  }
+  function renderDetail(i){ document.getElementById('detail').innerHTML=detailHTML(EVENTS[i]); }
+
+  /* ── SEARCH PAGE ── */
+  const SEARCH=[
+    {kind:'screen',title:'Design Session — Figma',shot:'wall',hue:'var(--emerald)',when:'oggi 15:42',rel:98,sn:'overlay timeline <mark>design</mark> mockup · sidebar + dettaglio'},
+    {kind:'note',title:'Nota — Slack #design',hue:'var(--violet)',when:'oggi 16:42',rel:92,sn:'“…porta il <mark>design</mark> a timeline piena, niente overlay”',note:'“…portiamo Déjà a timeline piena. Sidebar a sinistra, dettaglio a destra.”'},
+    {kind:'screen',title:'Chrome — dribbble',shot:'browser',hue:'var(--emerald)',when:'ieri 11:20',rel:85,sn:'dashboard <mark>design</mark> reference · TradUp dark'},
+    {kind:'audio',title:'Team Sync — Zoom',hue:'var(--amber)',when:'ieri 16:30',rel:78,sn:'“…rivediamo il <mark>design</mark> dell’overlay”'},
+    {kind:'screen',title:'Figma — palette',shot:'wall',hue:'var(--emerald)',when:'3 giu 09:10',rel:71,sn:'token colore <mark>design</mark> system · Geist'},
+    {kind:'screen',title:'VS Code — theme.py',shot:'code',hue:'var(--blue)',when:'3 giu 21:40',rel:64,sn:'ui/theme.py · <mark>design</mark> tokens centrali'},
+  ];
+  function searchMedia(e){
+    if(e.kind==='audio') return `<div class="media"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v18M7 8v8M17 8v8M3 11v2M21 11v2"/></svg></span><span class="src"><i></i></span></div>`;
+    if(e.kind==='note') return `<div class="media"><span class="ic">${noteIc}</span><span class="src"><i></i></span></div>`;
+    return `<div class="media"><span class="shot ${e.shot}"></span><span class="src"><i></i></span></div>`;
+  }
+  function pageSearch(){
+    content.className='page-timeline';
+    let list='';SEARCH.forEach((e,i)=>{list+=`<div class="sres" data-i="${i}" style="--hue:${e.hue}">${searchMedia(e)}
+      <div class="mid"><div class="t">${e.title}</div><div class="sn">${e.sn}</div></div>
+      <div><div class="when">${e.when}</div><div class="rel"><span class="bb"><i style="width:${e.rel}%"></i></span><span class="pc">${e.rel}%</span></div></div></div>`;});
+    content.innerHTML=`
+      <main class="main">
+        <div class="top">
+          <div class="search">${srch}<input value="design" placeholder="Cerca nei tuoi ricordi…"><span class="k">⌘K</span></div>
+          <div class="seg"><button class="on">Tutto</button><button><span class="d" style="background:var(--emerald)"></span>Schermo</button><button><span class="d" style="background:var(--amber)"></span>Audio</button></div>
+        </div>
+        <div class="canvas">
+          <div class="sbar"><div class="cnt"><b>142 risultati</b> per «design»</div>
+            <div class="sort">Rilevanza <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div></div>
+          ${list}
+        </div>
+      </main>
+      <aside class="detail" id="detail"></aside>`;
+    const rows=[...content.querySelectorAll('.sres')];
+    rows.forEach(r=>r.addEventListener('click',()=>{rows.forEach(x=>x.classList.remove('sel'));r.classList.add('sel');
+      document.getElementById('detail').innerHTML=detailHTML(SEARCH[+r.dataset.i]);}));
+    rows[0].classList.add('sel');document.getElementById('detail').innerHTML=detailHTML(SEARCH[0]);
+  }
+  function audioDetail(){return `
+    <div class="dhead"><div class="k"><span class="badge au"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v18M7 8v8M17 8v8M3 11v2M21 11v2"/></svg></span><span class="t">Team Sync — Zoom</span></div><div class="sub">Registrazione vocale · 45:12</div></div>
+    <div class="dbody">
+      <div class="player"><div class="wave">${Array.from({length:20},(_,i)=>`<i style="height:${30+((i*37)%60)}%"></i>`).join('')}</div>
+        <div class="ctr"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zM11 6l9 6-9 6z"/></svg><span class="play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span><svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 6h2v12h-2zM13 6l-9 6 9 6z"/></svg></div>
+        <div class="bar"></div><div class="tm"><span>28:04</span><span>45:12</span></div></div>
+      <div class="tsearch">${srch}<input placeholder="Cerca nella trascrizione…"></div>
+      <div class="script">
+        <div class="line"><div class="who a">Robert</div><div class="tx"><span class="ts">15:55</span>portiamo Déjà a timeline piena, l'overlay ci sta stretto.</div></div>
+        <div class="line"><div class="who b">Assistente</div><div class="tx"><span class="ts">16:10</span>registrato. Collego al mockup Figma delle 15:42 e alla nota Slack.</div></div>
+        <div class="line"><div class="who a">Robert</div><div class="tx"><span class="ts">16:25</span>sidebar a sinistra, dettaglio a destra, come Chronos.</div></div>
+      </div>
+    </div>`;}
+
+  /* ── ASSISTANT PAGE ── */
+  function pageAssistant(){
+    content.className='page-2col';
+    content.innerHTML=`
+      <main class="main">
+        <div class="top"><div class="ptitle">Assistente</div>
+          <div style="margin-left:auto"><button class="btn">+ Nuova conversazione</button></div></div>
+        <div class="chat">
+          <div class="msg u"><div class="who">Tu</div><div class="bub">Cosa abbiamo deciso ieri sull'overlay di Déjà?</div></div>
+          <div class="msg a"><div class="who">Assistente</div>
+            <div class="bub">Avete deciso di <b>abbandonare l'overlay Spotlight</b> e trasformare Déjà in un'<b>app completa</b> con sidebar, timeline e pannello dettaglio — sul modello di Chronos. Niente più controllo parziale dal tray.</div>
+            <div class="cites"><span class="cite"><i style="background:var(--amber)"></i>◷ Zoom · 16:30</span><span class="cite"><i style="background:var(--emerald)"></i>▦ Figma · 15:42</span><span class="cite"><i style="background:var(--violet)"></i>✎ Slack · 16:42</span></div>
+          </div>
+          <div class="msg u"><div class="who">Tu</div><div class="bub">E sullo stile?</div></div>
+          <div class="msg a"><div class="who">Assistente</div>
+            <div class="bub">Più <b>sobrio e preciso</b>, meno effetti: via i gradienti da template, via il glow viola. Profondità data da materiale e bordi, non da bagliori.</div>
+            <div class="cites"><span class="cite"><i style="background:var(--amber)"></i>◷ Zoom · 16:40</span></div>
+          </div>
+        </div>
+        <div class="composer">
+          <div class="box"><input placeholder="Chiedi qualcosa ai tuoi ricordi…"><button class="mic">${micIc}</button><button class="send">${sendIc}</button></div>
+          <div class="hint">Le risposte citano i tuoi ricordi · tutto locale</div>
+        </div>
+      </main>
+      <aside class="srcs">
+        <h5>Fonti citate</h5>
+        <div class="srccard"><span class="m"><span class="ic" style="position:absolute;inset:0;display:grid;place-items:center"><svg viewBox="0 0 24 24" fill="none" stroke="var(--amber)"><path d="M12 3v18M7 8v8M17 8v8"/></svg></span></span><div><div class="tt">Team Sync — Zoom</div><div class="ss">16:30 · audio</div></div></div>
+        <div class="srccard"><span class="m"><span class="shot wall"></span></span><div><div class="tt">Design Session — Figma</div><div class="ss">15:42 · schermo</div></div></div>
+        <div class="srccard"><span class="m"><span class="ic" style="position:absolute;inset:0;display:grid;place-items:center">${noteIc.replace('currentColor','var(--violet)')}</span></span><div><div class="tt">Nota — Slack</div><div class="ss">16:42 · nota</div></div></div>
+      </aside>`;
+  }
+
+  /* ── SETTINGS PAGE ── */
+  function pageSettings(){
+    content.className='page-1col';
+    const sn=(ic,l,on)=>`<a class="${on?'on':''}">${ic}${l}</a>`;
+    content.innerHTML=`
+      <main class="main">
+        <div class="top"><div class="ptitle">Impostazioni</div></div>
+        <div class="setwrap">
+          <nav class="setnav">
+            ${sn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12h18M3 6h18M3 18h18"/></svg>','Generale')}
+            ${sn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="4" width="18" height="14" rx="2"/></svg>','Cattura')}
+            ${sn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 2l8 4v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6z"/></svg>','Area & Privacy',true)}
+            ${sn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>','AI')}
+            ${sn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7"/></svg>','Vision')}
+            ${sn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>','Sicurezza')}
+            ${sn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16M4 12h16M4 17h10"/></svg>','Modelli')}
+            ${sn('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/></svg>','Info')}
+          </nav>
+          <div class="setcontent">
+            <div class="seclbl">Area schermo & Privacy</div>
+            <div class="frow"><div class="l"><div class="t">Area di cattura</div><div class="d">Cattura tutto lo schermo o solo una regione scelta.</div></div>
+              <div class="fsel">Tutto lo schermo <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div></div>
+            <div class="frow"><div class="l"><div class="t">Oscura dati sensibili (PII)</div><div class="d">Maschera email, carte e password nel testo riconosciuto.</div></div><div class="sw on"></div></div>
+            <div class="frow"><div class="l"><div class="t">Pausa dopo inattività</div><div class="d">Sospende la cattura quando non usi il PC.</div></div><div class="fsel">5 min <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div></div>
+
+            <div class="seclbl">Estensione browser</div>
+            <div class="frow"><div class="l"><div class="t">Abilita estensione</div><div class="d">Salta automaticamente le schermate di login e i siti esclusi. Canale locale, nessuna porta di rete.</div></div><div class="sw"></div></div>
+            <div class="frow"><div class="l"><div class="t">Domini da non catturare</div><div class="d">Uno per riga.</div></div><input class="fin" placeholder="bank.com, mail.google.com"></div>
+          </div>
+        </div>
+        <div class="setfoot"><button class="btn">Annulla</button><button class="btn pri">Salva impostazioni</button></div>
+      </main>`;
+  }
+
+  /* ── GALLERY PAGE ── */
+  function pageGallery(){
+    content.className='page-1col';
+    const shots=['wall','code','term','browser','wall','browser','code','term','wall','code','browser','term'];
+    const apps=['Figma','VS Code','PowerShell','Chrome','Slack','Notion','VS Code','Terminal','Photoshop','VS Code','Chrome','Build'];
+    let tiles='';shots.forEach((s,i)=>{tiles+=`<div class="tile"><span class="shot ${s}"></span><div class="cap"><span class="ap">${apps[i]}</span><span class="tm">${17-Math.floor(i/3)}:${(50-i*3+60)%60}</span></div></div>`;});
+    content.innerHTML=`
+      <main class="main">
+        <div class="top"><div class="search">${srch}<input placeholder="Filtra la galleria…"></div>
+          <div class="seg"><button class="on">Tutto</button><button>App</button><button>Oggi</button></div></div>
+        <div class="gallery"><div class="daydiv"><b>Oggi</b><span>6 giugno · 2.966 immagini</span></div><div class="grid">${tiles}</div></div>
+      </main>`;
+  }
+
+  const PAGES={timeline:pageTimeline,search:pageSearch,assistant:pageAssistant,settings:pageSettings,
+    gallery:pageGallery,info:pageSettings};
+  document.querySelectorAll('#nav a,#nav2 a').forEach(a=>a.addEventListener('click',()=>{
+    document.querySelectorAll('#nav a,#nav2 a').forEach(x=>x.classList.remove('on'));
+    a.classList.add('on');(PAGES[a.dataset.p]||pageTimeline)();
+  }));
+  pageTimeline();
+</script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Déjà Bridge",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Privacy bridge per Déjà: salta la cattura su schermate di login e siti esclusi. Canale locale sicuro, nessuna porta di rete.",
   "permissions": ["tabs", "nativeMessaging", "storage", "alarms"],
   "host_permissions": ["<all_urls>"],

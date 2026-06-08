@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Déjà — Brutalist Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* Deja palette — used as FLAT hard accents, no glow */
+    --bg:        #0e0e12;
+    --panel:     #131319;
+    --panel-2:   #16161d;
+    --ink:       #f3f4f6;
+    --ink-soft:  #8b8d98;
+    --ink-faint: #5a5b66;
+
+    --violet:    #a78bfa;
+    --amber:     #f59e0b;
+    --emerald:   #10b981;
+    --red:       #ef4444;
+    --pink:      #fb7185;
+    --green:     #34d399;
+    --blue:      #60a5fa;
+    --teal:      #5eead4;
+
+    --line:      rgba(255,255,255,.14);
+    --line-hard: rgba(255,255,255,.22);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+
+  body {
+    font-family: "JetBrains Mono", monospace;
+    color: var(--ink);
+    background: var(--bg);
+    min-height: 100vh; display: grid; place-items: center; overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* grid texture + scanlines, no blur */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .5;
+    background-image:
+      linear-gradient(rgba(255,255,255,.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px);
+    background-size: 38px 38px;
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; z-index: 6; pointer-events: none; opacity: .35;
+    background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,0,0,.18) 2px 3px);
+    mix-blend-mode: multiply;
+  }
+
+  .console {
+    position: relative; z-index: 2; width: min(680px, 94vw);
+    background: var(--panel);
+    border: 1.5px solid var(--line-hard);
+    box-shadow: 8px 8px 0 rgba(0,0,0,.55);
+    animation: pop .18s steps(3) both;
+  }
+
+  /* ── title bar ───────────────────────────────── */
+  .titlebar {
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1.5px solid var(--line-hard);
+    padding: 9px 14px; background: var(--panel-2);
+  }
+  .wm { font-family: "Archivo"; font-weight: 900; font-size: 17px; letter-spacing: .04em; }
+  .wm b { color: var(--violet); }
+  .status { display: flex; gap: 16px; font-size: 11px; color: var(--ink-faint); letter-spacing: .08em; }
+  .status .rec { color: var(--red); }
+  .status .rec::before { content: "● "; }
+
+  /* ── query line ──────────────────────────────── */
+  .query {
+    display: flex; align-items: center; gap: 10px; padding: 16px 14px;
+    border-bottom: 1.5px solid var(--line); font-size: 17px;
+  }
+  .prompt { color: var(--emerald); font-weight: 700; }
+  .typed { white-space: pre; }
+  .caret { display: inline-block; width: 9px; height: 19px; background: var(--violet);
+           margin-left: 2px; vertical-align: -3px; animation: blink 1s steps(1) infinite; }
+
+  /* ── mode tabs ───────────────────────────────── */
+  .modes { display: flex; border-bottom: 1.5px solid var(--line); }
+  .mode {
+    flex: 1; font-family: "JetBrains Mono"; font-weight: 500; font-size: 11.5px; letter-spacing: .1em;
+    text-transform: uppercase; cursor: pointer; color: var(--ink-soft);
+    background: var(--panel); border: none; border-right: 1.5px solid var(--line);
+    padding: 9px 0; transition: none;
+  }
+  .mode:last-child { border-right: none; }
+  .mode:hover { background: var(--panel-2); color: var(--ink); }
+  .mode.on { background: var(--violet); color: #14101f; font-weight: 700; }
+
+  /* ── results table ───────────────────────────── */
+  .results .divider {
+    display: flex; align-items: center; gap: 10px; padding: 11px 14px 7px;
+    font-size: 10px; letter-spacing: .22em; color: var(--ink-faint); text-transform: uppercase;
+  }
+  .results .divider::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
+
+  .row {
+    display: grid; grid-template-columns: 84px 1fr auto; align-items: center; gap: 14px;
+    padding: 9px 14px; cursor: pointer; border-left: 3px solid transparent;
+    opacity: 0; animation: row .2s steps(2) forwards;
+  }
+  .row:hover { background: var(--hue); color: #0e0e12; border-left-color: #0e0e12; }
+  .row:hover .preview, .row:hover .time, .row:hover .preview em { color: #0e0e12; }
+  .row:hover .preview mark { background: #0e0e12; color: var(--hue); }
+  .row:hover .tag { background: #0e0e12; color: var(--hue); }
+
+  .tag {
+    font-size: 10px; font-weight: 700; letter-spacing: .06em; text-align: center;
+    background: var(--hue); color: #0e0e12; padding: 3px 0; border-radius: 2px; text-transform: uppercase;
+  }
+  .preview { font-size: 13px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview em { color: var(--ink); font-style: normal; font-weight: 700; }
+  .preview mark { background: var(--violet); color: #14101f; padding: 0 3px; font-weight: 700; border-radius: 2px; }
+  .time { font-size: 11.5px; color: var(--ink-faint); }
+
+  /* ── status footer ───────────────────────────── */
+  .statusbar {
+    display: flex; align-items: center; justify-content: space-between;
+    border-top: 1.5px solid var(--line-hard); background: var(--panel-2);
+    padding: 8px 14px; font-size: 11px; color: var(--ink-faint); letter-spacing: .06em;
+  }
+  .statusbar .bar { display: flex; gap: 2px; }
+  .statusbar .bar i { width: 9px; height: 9px; background: var(--line); }
+  .statusbar .bar i.lit { background: var(--emerald); }
+
+  /* ── chat ────────────────────────────────────── */
+  .chat { display: none; flex-direction: column; gap: 12px; padding: 16px 14px; }
+  .panel-chat .results, .panel-chat .statusbar { display: none; }
+  .panel-chat .chat { display: flex; }
+  .line { font-size: 13px; line-height: 1.6; }
+  .line .who { font-weight: 700; }
+  .line.you .who { color: var(--blue); }
+  .line.deja .who { color: var(--violet); }
+  .line .txt { color: var(--ink); }
+  .line.deja .txt { color: var(--ink-soft); }
+  .ref { font-weight: 700; padding: 0 3px; border-radius: 2px; }
+  .ref.ss { background: var(--emerald); color: #0e0e12; }
+  .ref.au { background: var(--amber);   color: #0e0e12; }
+
+  .hint { text-align: center; font-size: 10px; color: var(--ink-faint); letter-spacing: .1em;
+          margin-top: 12px; z-index: 2; position: relative; }
+  .hint b { color: var(--violet); }
+
+  @keyframes pop   { from { transform: translate(6px,6px); opacity: 0; } to { transform: none; opacity: 1; } }
+  @keyframes row   { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
+  @keyframes blink { 0%,50% { opacity: 1; } 50.01%,100% { opacity: 0; } }
+
+  .row:nth-child(2){animation-delay:.04s}.row:nth-child(3){animation-delay:.08s}
+  .row:nth-child(4){animation-delay:.12s}.row:nth-child(6){animation-delay:.18s}.row:nth-child(7){animation-delay:.22s}
+</style>
+</head>
+<body>
+  <div style="display:flex;flex-direction:column;align-items:center">
+  <div class="console">
+    <!-- title bar -->
+    <div class="titlebar">
+      <div class="wm">[ DÉJ<b>À</b> ]</div>
+      <div class="status"><span class="rec">REC</span><span>MEM 12,402</span><span>v1.1.0</span></div>
+    </div>
+
+    <!-- query -->
+    <div class="query">
+      <span class="prompt">&gt;</span><span class="typed" id="typed"></span><span class="caret"></span>
+    </div>
+
+    <!-- modes -->
+    <div class="modes">
+      <button class="mode on" data-view="search">Ricerca</button>
+      <button class="mode" data-view="chat">Chiedi</button>
+      <button class="mode" data-view="search">Cronologia</button>
+    </div>
+
+    <!-- panel -->
+    <div id="panel">
+      <div class="results">
+        <div class="divider">Oggi · 3</div>
+
+        <div class="row" style="--hue:var(--pink);animation-delay:0s">
+          <span class="tag">Figma</span>
+          <span class="preview">mockup overlay — <em>barra</em> <mark>ricerca</mark> espansa, griglia</span>
+          <span class="time">14:32</span>
+        </div>
+        <div class="row" style="--hue:var(--green)">
+          <span class="tag">Slack</span>
+          <span class="preview">"…portiamo il <mark>design</mark> da console anche nell'app"</span>
+          <span class="time">11:08</span>
+        </div>
+        <div class="row" style="--hue:var(--blue)">
+          <span class="tag">Mail</span>
+          <span class="preview">re: revisione <mark>design</mark> — feedback allegato</span>
+          <span class="time">09:41</span>
+        </div>
+
+        <div class="divider">Ieri · 2</div>
+
+        <div class="row" style="--hue:var(--teal)">
+          <span class="tag">Zoom</span>
+          <span class="preview">riunione <mark>design</mark> — note + trascrizione audio</span>
+          <span class="time">16:00</span>
+        </div>
+        <div class="row" style="--hue:var(--amber)">
+          <span class="tag">VS Code</span>
+          <span class="preview">ui/window.py — refactor <mark>design</mark> tokens</span>
+          <span class="time">15:12</span>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <span>5 RESULTS · 38MS · QUERY OK</span>
+        <span class="bar"><i class="lit"></i><i class="lit"></i><i class="lit"></i><i></i><i></i></span>
+      </div>
+
+      <!-- chat -->
+      <div class="chat">
+        <div class="line you"><span class="who">you&gt; </span><span class="txt">cosa abbiamo deciso ieri sull'overlay?</span></div>
+        <div class="line deja"><span class="who">deja&gt; </span><span class="txt">direzione <b>brutalist console</b>: mono, spigoli vivi, tag piatti colorati. registrato in <span class="ref au">au:88</span> Zoom 16:00 e nel mockup <span class="ref ss">ss:42</span> Figma 14:32.</span></div>
+        <div class="line you"><span class="who">you&gt; </span><span class="txt">ok. stessi colori di adesso?</span></div>
+        <div class="line deja"><span class="who">deja&gt; </span><span class="txt">sì — palette invariata, usata piatta.</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="hint">&lt;<b>ENTER</b>&gt; apri &nbsp; &lt;<b>TAB</b>&gt; modo &nbsp; &lt;<b>ESC</b>&gt; chiudi</div>
+  </div>
+
+<script>
+  const target = "riunione design di ieri", el = document.getElementById("typed");
+  let i = 0;
+  (function type(){ if (i <= target.length){ el.textContent = target.slice(0,i++); setTimeout(type, 50 + Math.random()*45);} })();
+
+  const panel = document.getElementById("panel");
+  document.querySelectorAll(".mode").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll(".mode").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    panel.classList.toggle("panel-chat", b.dataset.view === "chat");
+  }));
+</script>
+</body>
+</html>

@@ -39,3 +39,12 @@ obsidian/
 # ── File di debug / audio personali ──
 *.wav
 debug_audio.wav
+graphify-out/
+design/_rows.png
+design/_smoke.png
+design/_smoke_expanded.png
+design/_smoke_real.png
+design/_smoke_explore.png
+design/_smoke_shell.png
+deja.db*
+design/_smoke_settings.png

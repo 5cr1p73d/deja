@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Déjà — Time Machine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:        #0e0e12;
+    --bg-2:      #0a0a0d;
+    --card:      #15151b;
+    --card-2:    #1b1b23;
+    --ink:       #f3f4f6;
+    --ink-soft:  #8b8d98;
+    --ink-faint: #5a5b66;
+
+    --violet:    #a78bfa;
+    --amber:     #f59e0b;
+    --emerald:   #10b981;
+    --red:       #ef4444;
+    --pink:      #fb7185;
+    --green:     #34d399;
+    --blue:      #60a5fa;
+    --teal:      #5eead4;
+
+    --line:      rgba(255,255,255,.08);
+    --line-2:    rgba(255,255,255,.05);
+    --ease:      cubic-bezier(.22,.61,.36,1);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Sora", sans-serif; color: var(--ink); background: var(--bg-2);
+    min-height: 100vh; display: grid; place-items: center; overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .app {
+    width: min(880px, 95vw); height: min(560px, 90vh);
+    background: var(--bg); border: 1px solid var(--line);
+    border-radius: 20px; overflow: hidden; position: relative;
+    box-shadow: 0 40px 100px -40px rgba(0,0,0,.9);
+    display: grid; grid-template-rows: auto 1fr auto;
+    animation: rise .6s var(--ease) both;
+  }
+
+  /* ── search header ─────────────────────────────── */
+  .head { display: flex; align-items: center; gap: 14px; padding: 16px 22px;
+          border-bottom: 1px solid var(--line); }
+  .mark { width: 26px; height: 26px; border-radius: 8px; flex: none; position: relative;
+          background: conic-gradient(from 220deg, var(--violet), var(--blue), var(--teal), var(--violet)); }
+  .mark::after { content: ""; position: absolute; inset: 6px; border-radius: 50%;
+                 background: var(--bg); box-shadow: 0 0 0 1.5px var(--ink) inset; }
+  .search { flex: 1; display: flex; align-items: center; font-size: 16px; }
+  .search .typed { white-space: pre; }
+  .search .cur { width: 2px; height: 19px; background: var(--violet); margin-left: 1px;
+                 box-shadow: 0 0 8px var(--violet); animation: blink 1s steps(1) infinite; }
+  .daypick { font-family: "Geist Mono"; font-size: 12px; color: var(--ink-soft);
+             border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; }
+  .daypick b { color: var(--violet); }
+
+  /* ── body: timeline rail + detail ──────────────── */
+  .body { display: grid; grid-template-columns: 240px 1fr; overflow: hidden; }
+
+  .rail { position: relative; border-right: 1px solid var(--line); overflow-y: auto; padding: 8px 0; }
+  .rail::before { content: ""; position: absolute; left: 70px; top: 0; bottom: 0; width: 2px;
+                  background: linear-gradient(var(--line) 0 80%, transparent); }
+  .playhead { position: absolute; left: 0; right: 0; height: 2px; background: var(--violet);
+              box-shadow: 0 0 14px var(--violet); z-index: 4; transition: top .45s var(--ease); }
+  .playhead::after { content: ""; position: absolute; left: 63px; top: -4px; width: 10px; height: 10px;
+                     border-radius: 50%; background: var(--violet); box-shadow: 0 0 12px var(--violet); }
+
+  .ev { position: relative; display: grid; grid-template-columns: 56px 1fr; align-items: center;
+        gap: 0; padding: 9px 14px 9px 0; cursor: pointer; opacity: 0; animation: slide .45s var(--ease) forwards; }
+  .ev .t { font-family: "Geist Mono"; font-size: 11px; color: var(--ink-faint); text-align: right; padding-right: 10px; }
+  .ev .bead { position: absolute; left: 65px; width: 12px; height: 12px; border-radius: 50%;
+              background: var(--bg); border: 2px solid var(--hue); transition: all .25s var(--ease); z-index: 3; }
+  .ev .lbl { padding-left: 30px; font-size: 13px; color: var(--ink-soft); transition: color .2s var(--ease);
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ev:hover .lbl { color: var(--ink); }
+  .ev:hover .bead { transform: scale(1.2); }
+  .ev.on .bead { background: var(--hue); box-shadow: 0 0 14px var(--hue); transform: scale(1.25); }
+  .ev.on .lbl { color: var(--ink); font-weight: 600; }
+  .ev.on .t { color: var(--ink-soft); }
+
+  .daymark { font-family: "Geist Mono"; font-size: 10px; letter-spacing: .2em; text-transform: uppercase;
+             color: var(--ink-faint); padding: 14px 14px 6px 86px; }
+
+  /* ── detail card ───────────────────────────────── */
+  .detail { padding: 26px 28px; overflow-y: auto; position: relative; }
+  .detail .thumb { height: 150px; border-radius: 14px; margin-bottom: 18px; position: relative; overflow: hidden;
+                   border: 1px solid var(--line); display: grid; place-items: center;
+                   background: linear-gradient(135deg, var(--bg-2), var(--card)); }
+  .detail .thumb .ph { font-size: 13px; color: var(--ink-faint); font-family: "Geist Mono"; }
+  .detail .thumb::before { content: ""; position: absolute; inset: 0; opacity: .14;
+                           background: radial-gradient(80% 120% at 20% 0%, var(--hue), transparent 60%); }
+  .detail .meta { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .detail .src { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; }
+  .detail .src .d { width: 9px; height: 9px; border-radius: 50%; background: var(--hue); box-shadow: 0 0 10px var(--hue); }
+  .detail .when { font-family: "Geist Mono"; font-size: 12px; color: var(--ink-faint); margin-left: auto; }
+  .detail h2 { font-size: 21px; font-weight: 600; letter-spacing: -.01em; margin-bottom: 12px; line-height: 1.25; }
+  .detail h2 mark { background: rgba(167,139,250,.2); color: var(--violet); border-radius: 5px; padding: 0 5px; }
+  .detail p { font-size: 14px; line-height: 1.65; color: var(--ink-soft); margin-bottom: 18px; }
+  .detail .acts { display: flex; gap: 9px; }
+  .detail .btn { font-family: "Sora"; font-size: 12.5px; font-weight: 500; cursor: pointer;
+                 border: 1px solid var(--line); background: var(--card); color: var(--ink);
+                 border-radius: 9px; padding: 8px 14px; transition: all .2s var(--ease); }
+  .detail .btn:hover { background: var(--card-2); border-color: rgba(167,139,250,.4); }
+  .detail .btn.pri { background: var(--violet); color: #14101f; border-color: transparent; font-weight: 600; }
+  .detail .ctx { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .detail .ctx .ttl { font-family: "Geist Mono"; font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+                      color: var(--ink-faint); margin-bottom: 10px; }
+  .detail .ctx .near { display: flex; gap: 8px; }
+  .detail .ctx .chip { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-soft);
+                       background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
+  .detail .ctx .chip .d { width: 7px; height: 7px; border-radius: 50%; }
+
+  /* ── footer: day density scrubber ──────────────── */
+  .foot { display: flex; align-items: center; gap: 14px; padding: 12px 22px; border-top: 1px solid var(--line);
+          background: var(--bg-2); }
+  .foot .lab { font-family: "Geist Mono"; font-size: 10.5px; color: var(--ink-faint); flex: none; }
+  .density { flex: 1; display: flex; align-items: flex-end; gap: 2px; height: 26px; }
+  .density i { flex: 1; background: var(--line); border-radius: 2px 2px 0 0; transition: background .3s var(--ease); }
+  .density i.hot { background: var(--violet); }
+  .density i.warm { background: rgba(167,139,250,.45); }
+
+  @keyframes rise  { from { opacity: 0; transform: translateY(16px) scale(.99); } to { opacity: 1; transform: none; } }
+  @keyframes slide { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+  @keyframes blink { 0%,50% { opacity: 1; } 50.01%,100% { opacity: 0; } }
+
+  .ev:nth-child(2){animation-delay:.05s}.ev:nth-child(3){animation-delay:.1s}.ev:nth-child(4){animation-delay:.15s}
+  .ev:nth-child(6){animation-delay:.22s}.ev:nth-child(7){animation-delay:.27s}.ev:nth-child(8){animation-delay:.32s}
+</style>
+</head>
+<body>
+  <div class="app">
+    <!-- header -->
+    <div class="head">
+      <div class="mark"></div>
+      <div class="search"><span class="typed" id="typed"></span><span class="cur"></span></div>
+      <div class="daypick">◂ <b>OGGI</b> ▸</div>
+    </div>
+
+    <!-- body -->
+    <div class="body">
+      <!-- timeline rail -->
+      <div class="rail" id="rail">
+        <div class="playhead" id="playhead" style="top:150px"></div>
+
+        <div class="daymark">Oggi</div>
+        <div class="ev on" style="--hue:var(--pink)"  data-src="Figma"  data-time="14:32"
+             data-title="Mockup overlay — barra <mark>ricerca</mark> espansa"
+             data-body="Frame con la timeline a sinistra e il dettaglio del ricordo a destra. Annotato il playhead viola e le perle per sorgente.">
+          <span class="t">14:32</span><span class="bead"></span><span class="lbl">Mockup overlay espanso</span>
+        </div>
+        <div class="ev" style="--hue:var(--green)" data-src="Slack" data-time="11:08"
+             data-title="“…portiamo il <mark>design</mark> a timeline anche nell'app”"
+             data-body="Thread con il team: consenso sul modello temporale come metafora principale dell'overlay.">
+          <span class="t">11:08</span><span class="bead"></span><span class="lbl">Thread design timeline</span>
+        </div>
+        <div class="ev" style="--hue:var(--blue)" data-src="Mail" data-time="09:41"
+             data-title="Re: revisione <mark>design</mark> — feedback allegato"
+             data-body="Email con allegato PDF dei feedback sulla revisione. Tre note sul contrasto e una sulla densità.">
+          <span class="t">09:41</span><span class="bead"></span><span class="lbl">Revisione design (mail)</span>
+        </div>
+
+        <div class="daymark">Ieri</div>
+        <div class="ev" style="--hue:var(--teal)" data-src="Zoom" data-time="16:00"
+             data-title="Riunione <mark>design</mark> — note &amp; trascrizione"
+             data-body="Call di 42 min. Trascrizione audio indicizzata; decisione sull'estetica timeline registrata al minuto 18.">
+          <span class="t">16:00</span><span class="bead"></span><span class="lbl">Riunione design (Zoom)</span>
+        </div>
+        <div class="ev" style="--hue:var(--amber)" data-src="VS Code" data-time="15:12"
+             data-title="ui/window.py — refactor <mark>design</mark> tokens"
+             data-body="Sessione di refactor: estrazione token in ui/theme.py, sostituzione degli stili inline.">
+          <span class="t">15:12</span><span class="bead"></span><span class="lbl">Refactor tokens (codice)</span>
+        </div>
+      </div>
+
+      <!-- detail -->
+      <div class="detail" id="detail" style="--hue:var(--pink)">
+        <div class="thumb"><span class="ph">▦ anteprima cattura</span></div>
+        <div class="meta">
+          <span class="src"><span class="d"></span><span id="d-src">Figma</span></span>
+          <span class="when" id="d-when">Oggi · 14:32</span>
+        </div>
+        <h2 id="d-title">Mockup overlay — barra <mark>ricerca</mark> espansa</h2>
+        <p id="d-body">Frame con la timeline a sinistra e il dettaglio del ricordo a destra. Annotato il playhead viola e le perle per sorgente.</p>
+        <div class="acts">
+          <button class="btn pri">Apri ricordo</button>
+          <button class="btn">Chiedi all'AI</button>
+          <button class="btn">± 5 min</button>
+        </div>
+        <div class="ctx">
+          <div class="ttl">Intorno a questo momento</div>
+          <div class="near">
+            <span class="chip"><span class="d" style="background:var(--emerald)"></span>screenshot 14:31</span>
+            <span class="chip"><span class="d" style="background:var(--amber)"></span>audio 14:30</span>
+            <span class="chip"><span class="d" style="background:var(--blue)"></span>Chrome 14:33</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- footer density scrubber -->
+    <div class="foot">
+      <span class="lab">00</span>
+      <div class="density">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i class="warm"></i><i class="hot"></i>
+        <i class="warm"></i><i></i><i></i><i></i><i class="hot"></i><i class="hot"></i><i class="warm"></i>
+        <i></i><i class="warm"></i><i></i><i></i><i></i><i></i><i></i>
+      </div>
+      <span class="lab">24</span>
+    </div>
+  </div>
+
+<script>
+  const target = "design", el = document.getElementById("typed");
+  let i = 0;
+  (function type(){ if (i <= target.length){ el.textContent = target.slice(0,i++); setTimeout(type, 120);} })();
+
+  const detail = document.getElementById("detail");
+  const playhead = document.getElementById("playhead");
+  const rail = document.getElementById("rail");
+  document.querySelectorAll(".ev").forEach(ev => {
+    ev.addEventListener("click", () => {
+      document.querySelectorAll(".ev").forEach(e => e.classList.remove("on"));
+      ev.classList.add("on");
+      detail.style.setProperty("--hue", getComputedStyle(ev).getPropertyValue("--hue"));
+      document.getElementById("d-src").textContent = ev.dataset.src;
+      document.getElementById("d-when").textContent = (ev.closest(".rail").querySelectorAll(".daymark"), "· " + ev.dataset.time);
+      document.getElementById("d-title").innerHTML = ev.dataset.title;
+      document.getElementById("d-body").textContent = ev.dataset.body;
+      // move playhead to bead
+      const top = ev.offsetTop + ev.offsetHeight / 2 - rail.scrollTop;
+      playhead.style.top = (ev.offsetTop + ev.offsetHeight / 2) + "px";
+      detail.animate([{opacity:.3, transform:"translateY(6px)"},{opacity:1, transform:"none"}], {duration:280, easing:"cubic-bezier(.22,.61,.36,1)"});
+    });
+  });
+</script>
+</body>
+</html>

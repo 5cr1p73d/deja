@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Déjà — Luminous Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..700&family=Hanken+Grotesk:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* ── Deja's own palette (unchanged) ───────────── */
+    --bg:        #0e0e12;
+    --bg-2:      #0a0a0d;
+    --ink:       #f3f4f6;
+    --ink-soft:  #8b8d98;
+    --ink-faint: #5a5b66;
+
+    --violet:    #a78bfa;   /* AI / brand */
+    --amber:     #f59e0b;   /* audio */
+    --emerald:   #10b981;   /* screenshot */
+    --red:       #ef4444;
+
+    /* app-hash hues (exact from _APP_PALETTE) */
+    --pink:   #fb7185;
+    --green:  #34d399;
+    --blue:   #60a5fa;
+    --fuchsia:#f472b6;
+    --teal:   #5eead4;
+    --indigo: #8b5cf6;
+
+    --glass:     rgba(28, 28, 36, 0.55);
+    --glass-2:   rgba(40, 40, 52, 0.6);
+    --line:      rgba(255, 255, 255, 0.08);
+    --line-lit:  rgba(167, 139, 250, 0.45);
+    --radius:    16px;
+    --ease:      cubic-bezier(.22, .61, .36, 1);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+
+  body {
+    font-family: "Hanken Grotesk", sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    min-height: 100vh;
+    display: grid; place-items: center;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* ── atmosphere: drifting aurora blobs + grain ──── */
+  .aurora { position: fixed; inset: -20%; z-index: 0; filter: blur(90px); opacity: .55; }
+  .aurora i { position: absolute; border-radius: 50%; mix-blend-mode: screen; }
+  .b1 { width: 46vw; height: 46vw; left: 8%;  top: 2%;  background: radial-gradient(circle, var(--violet), transparent 62%); animation: float1 22s ease-in-out infinite; }
+  .b2 { width: 40vw; height: 40vw; right: 4%; top: 26%; background: radial-gradient(circle, var(--blue), transparent 62%);   animation: float2 27s ease-in-out infinite; }
+  .b3 { width: 34vw; height: 34vw; left: 30%; bottom: 0; background: radial-gradient(circle, var(--teal), transparent 62%);   animation: float3 30s ease-in-out infinite; }
+  .grain {
+    position: fixed; inset: 0; z-index: 1; pointer-events: none; opacity: .04; mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .dust { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+  .dust canvas { width: 100%; height: 100%; display: block; }
+
+  /* ── spotlight stack ───────────────────────────── */
+  .stage { position: relative; z-index: 3; width: min(660px, 92vw); display: flex; flex-direction: column; gap: 12px; }
+
+  .bar {
+    position: relative;
+    background: var(--glass);
+    backdrop-filter: blur(40px) saturate(140%);
+    -webkit-backdrop-filter: blur(40px) saturate(140%);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 22px 16px;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.06) inset,
+      0 24px 70px -28px rgba(0,0,0,.9);
+    animation: rise .65s var(--ease) both;
+    overflow: hidden;
+  }
+  .bar::before {  /* spectral hairline */
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--violet), var(--blue), var(--teal), transparent);
+    opacity: .7;
+  }
+
+  .topline { display: flex; align-items: center; gap: 14px; }
+
+  .glyph {
+    width: 30px; height: 30px; flex: none; border-radius: 9px; position: relative;
+    background: linear-gradient(135deg, var(--violet), var(--blue));
+    box-shadow: 0 0 18px -4px var(--violet);
+    display: grid; place-items: center;
+  }
+  .glyph::after {
+    content: ""; width: 11px; height: 11px; border-radius: 50%;
+    border: 2px solid rgba(14,14,18,.85); background: var(--ink);
+  }
+
+  .field {
+    flex: 1; display: flex; align-items: center; min-width: 0;
+    font-family: "Hanken Grotesk"; font-weight: 400; font-size: 19px; color: var(--ink);
+  }
+  .field .typed { white-space: pre; }
+  .blink { width: 2px; height: 22px; background: var(--violet); margin-left: 2px;
+           box-shadow: 0 0 10px var(--violet); animation: blink 1.05s steps(1) infinite; }
+
+  .brand {
+    font-family: "Bricolage Grotesque"; font-weight: 600; font-size: 15px; letter-spacing: -.01em;
+    color: var(--ink-soft); flex: none;
+  }
+  .kbd {
+    font-family: "JetBrains Mono"; font-size: 10.5px; color: var(--ink-faint); flex: none;
+    display: flex; gap: 5px;
+  }
+  .kbd b { color: var(--ink-soft); background: rgba(255,255,255,.05); border: 1px solid var(--line);
+           border-radius: 5px; padding: 2px 5px; font-weight: 500; }
+
+  .modes { display: flex; gap: 8px; margin-top: 14px; }
+  .mode {
+    font-family: "Hanken Grotesk"; font-size: 12.5px; font-weight: 500; cursor: pointer;
+    color: var(--ink-soft); background: rgba(255,255,255,.03); border: 1px solid var(--line);
+    border-radius: 999px; padding: 6px 14px; transition: all .25s var(--ease);
+  }
+  .mode:hover { color: var(--ink); background: rgba(255,255,255,.06); }
+  .mode.on {
+    color: var(--ink); border-color: var(--line-lit);
+    background: linear-gradient(180deg, rgba(167,139,250,.22), rgba(167,139,250,.08));
+    box-shadow: 0 0 18px -6px var(--violet);
+  }
+
+  /* ── panel ─────────────────────────────────────── */
+  .panel {
+    background: var(--glass);
+    backdrop-filter: blur(40px) saturate(140%);
+    -webkit-backdrop-filter: blur(40px) saturate(140%);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 8px; box-shadow: 0 24px 70px -30px rgba(0,0,0,.85);
+    animation: rise .65s var(--ease) .07s both;
+  }
+  .panel.chat-mode .results { display: none; }
+  .panel.chat-mode .chat { display: flex; }
+  .panel.search .chat { display: none; }
+
+  .bucket {
+    font-family: "JetBrains Mono"; font-size: 10px; font-weight: 500; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--ink-faint);
+    padding: 14px 14px 8px; display: flex; align-items: center; gap: 10px;
+  }
+  .bucket::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+  .row {
+    display: grid; grid-template-columns: auto 116px 1fr auto; align-items: center; gap: 14px;
+    padding: 11px 14px; border-radius: 12px; cursor: pointer; position: relative;
+    transition: background .22s var(--ease), transform .22s var(--ease);
+    opacity: 0; animation: row .5s var(--ease) forwards;
+  }
+  .row::before {
+    content: ""; position: absolute; left: 4px; top: 20%; bottom: 20%; width: 2.5px; border-radius: 3px;
+    background: var(--hue, var(--violet)); box-shadow: 0 0 10px var(--hue, var(--violet));
+    opacity: 0; transform: scaleY(.3); transition: all .22s var(--ease);
+  }
+  .row:hover { background: rgba(255,255,255,.05); transform: translateX(2px); }
+  .row:hover::before { opacity: 1; transform: scaleY(1); }
+
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--hue);
+         box-shadow: 0 0 12px -1px var(--hue); }
+  .app { font-weight: 600; font-size: 14px; }
+  .preview { font-size: 13.5px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .preview mark { background: rgba(167,139,250,.18); color: var(--violet); border-radius: 4px; padding: 0 3px; font-weight: 600; }
+  .preview em { color: var(--ink); font-style: normal; }
+  .time { font-family: "JetBrains Mono"; font-size: 11.5px; color: var(--ink-faint); }
+
+  .footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px 6px; font-family: "JetBrains Mono"; font-size: 11px; color: var(--ink-faint);
+  }
+  .footer .meter { display: flex; gap: 3px; }
+  .footer .meter i { width: 13px; height: 3px; border-radius: 2px; background: var(--line); }
+  .footer .meter i.lit { background: var(--violet); box-shadow: 0 0 8px -2px var(--violet); }
+
+  /* ── chat ──────────────────────────────────────── */
+  .chat { display: none; flex-direction: column; gap: 14px; padding: 18px 18px 12px; }
+  .turn { max-width: 86%; animation: row .5s var(--ease) both; }
+  .turn.user { align-self: flex-end; }
+  .turn .who { font-family: "JetBrains Mono"; font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
+               color: var(--ink-faint); margin-bottom: 5px; }
+  .turn.ai .who { color: var(--violet); }
+  .bubble { font-size: 14.5px; line-height: 1.58; background: rgba(255,255,255,.04);
+            border: 1px solid var(--line); border-radius: 14px; padding: 12px 15px; }
+  .turn.user .bubble { background: linear-gradient(180deg, rgba(167,139,250,.16), rgba(167,139,250,.06));
+                       border-color: var(--line-lit); }
+  .turn.ai .bubble { background: rgba(255,255,255,.045); }
+  .ref { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle;
+         font-family: "JetBrains Mono"; font-size: 10.5px; border-radius: 7px; padding: 1px 7px; margin: 0 2px; }
+  .ref.ss { color: var(--emerald); border: 1px solid rgba(16,185,129,.4);  background: rgba(16,185,129,.08); }
+  .ref.au { color: var(--amber);   border: 1px solid rgba(245,158,11,.4);  background: rgba(245,158,11,.08); }
+
+  .hint { text-align: center; font-family: "JetBrains Mono"; font-size: 10.5px; color: var(--ink-faint);
+          letter-spacing: .06em; margin-top: 2px; animation: rise .65s var(--ease) .14s both; }
+  .hint span { color: var(--violet); }
+
+  /* ── keyframes ─────────────────────────────────── */
+  @keyframes rise  { from { opacity: 0; transform: translateY(14px) scale(.985); } to { opacity: 1; transform: none; } }
+  @keyframes row   { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+  @keyframes float1 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(6%, 5%); } }
+  @keyframes float2 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(-5%, 7%); } }
+  @keyframes float3 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(4%, -6%); } }
+
+  .row:nth-child(2){animation-delay:.10s}.row:nth-child(3){animation-delay:.16s}
+  .row:nth-child(4){animation-delay:.22s}.row:nth-child(6){animation-delay:.30s}.row:nth-child(7){animation-delay:.36s}
+  .turn:nth-child(1){animation-delay:.10s}.turn:nth-child(2){animation-delay:.24s}.turn:nth-child(3){animation-delay:.40s}
+</style>
+</head>
+<body>
+  <div class="aurora"><i class="b1"></i><i class="b2"></i><i class="b3"></i></div>
+  <div class="grain"></div>
+  <div class="dust"><canvas id="dust"></canvas></div>
+
+  <div class="stage">
+    <!-- command bar -->
+    <div class="bar">
+      <div class="topline">
+        <div class="glyph"></div>
+        <div class="field"><span class="typed" id="typed"></span><span class="blink"></span></div>
+        <div class="brand">Déjà</div>
+        <div class="kbd"><b>Ctrl</b><b>⇧</b><b>D</b></div>
+      </div>
+      <div class="modes">
+        <button class="mode on" data-view="search">Ricerca</button>
+        <button class="mode" data-view="chat">Chiedi</button>
+        <button class="mode" data-view="search">Cronologia</button>
+      </div>
+    </div>
+
+    <!-- panel -->
+    <div class="panel search" id="panel">
+      <div class="results">
+        <div class="bucket">Oggi</div>
+
+        <div class="row" style="--hue:var(--pink);animation-delay:.05s">
+          <span class="dot"></span><span class="app">Figma</span>
+          <span class="preview">Mockup overlay — <em>barra</em> <mark>ricerca</mark> espansa, token glass</span>
+          <span class="time">14:32</span>
+        </div>
+        <div class="row" style="--hue:var(--green)">
+          <span class="dot"></span><span class="app">Slack</span>
+          <span class="preview">“…portiamo il <mark>design</mark> luminoso anche nell'app”</span>
+          <span class="time">11:08</span>
+        </div>
+        <div class="row" style="--hue:var(--blue)">
+          <span class="dot"></span><span class="app">Mail</span>
+          <span class="preview">Re: revisione <mark>design</mark> — feedback allegato</span>
+          <span class="time">09:41</span>
+        </div>
+
+        <div class="bucket">Ieri</div>
+
+        <div class="row" style="--hue:var(--teal)">
+          <span class="dot"></span><span class="app">Zoom</span>
+          <span class="preview">Riunione <mark>design</mark> — note &amp; trascrizione audio</span>
+          <span class="time">16:00</span>
+        </div>
+        <div class="row" style="--hue:var(--amber)">
+          <span class="dot"></span><span class="app">Spotify</span>
+          <span class="preview">Ascolto · focus mix mentre rivedevi il <mark>design</mark></span>
+          <span class="time">15:12</span>
+        </div>
+
+        <div class="footer">
+          <span>5 ricordi · 38ms</span>
+          <span class="meter"><i class="lit"></i><i class="lit"></i><i class="lit"></i><i></i><i></i></span>
+        </div>
+      </div>
+
+      <!-- chat -->
+      <div class="chat">
+        <div class="turn user"><div class="who">Tu</div>
+          <div class="bubble">Cosa abbiamo deciso ieri sull'overlay?</div></div>
+        <div class="turn ai"><div class="who">Déjà</div>
+          <div class="bubble">Avete scelto la direzione <em>luminous glass</em>: vetro scuro, aurora soffusa, ogni sorgente col suo colore.
+          Deciso qui<span class="ref au">♪ Zoom 16:00</span> e ripreso nel mockup<span class="ref ss">▦ Figma 14:32</span>.</div></div>
+        <div class="turn user"><div class="who">Tu</div>
+          <div class="bubble">Bene. Stessi colori che usiamo già?</div></div>
+      </div>
+    </div>
+
+    <div class="hint">premi <span>↵</span> apri · <span>Tab</span> cambia modo · <span>Esc</span> chiudi</div>
+  </div>
+
+<script>
+  const target = "riunione design di ieri", el = document.getElementById("typed");
+  let i = 0;
+  (function type(){ if (i <= target.length){ el.textContent = target.slice(0,i++); setTimeout(type, 55 + Math.random()*55);} })();
+
+  const panel = document.getElementById("panel");
+  document.querySelectorAll(".mode").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll(".mode").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    const chat = b.dataset.view === "chat";
+    panel.classList.toggle("chat-mode", chat);
+    panel.classList.toggle("search", !chat);
+  }));
+
+  /* spectral dust */
+  const cv = document.getElementById("dust"), ctx = cv.getContext("2d");
+  const hues = ["167,139,250","96,165,250","94,234,212","251,113,133","52,211,153"];
+  let W, H, motes;
+  function init(){ W = cv.width = innerWidth; H = cv.height = innerHeight;
+    motes = Array.from({length:40}, () => ({ x:Math.random()*W, y:Math.random()*H,
+      r:Math.random()*1.4+.4, vx:(Math.random()-.5)*.12, vy:(Math.random()-.5)*.12,
+      a:Math.random()*.4+.06, h:hues[Math.floor(Math.random()*hues.length)] })); }
+  function draw(){ ctx.clearRect(0,0,W,H);
+    for (const m of motes){ m.x+=m.vx; m.y+=m.vy;
+      if(m.x<0)m.x=W; if(m.x>W)m.x=0; if(m.y<0)m.y=H; if(m.y>H)m.y=0;
+      ctx.beginPath(); ctx.arc(m.x,m.y,m.r,0,6.283); ctx.fillStyle=`rgba(${m.h},${m.a})`; ctx.fill(); }
+    requestAnimationFrame(draw); }
+  init(); draw(); addEventListener("resize", init);
+</script>
+</body>
+</html>
