@@ -275,12 +275,15 @@ TOOLS = [
         "function": {
             "name": "search_memories",
             "description": (
-                "Cerca semanticamente nell'INTERO archivio storico dell'utente — screenshot OCR + "
-                "trascrizioni audio — senza nessun limite temporale. Copre TUTTO il database "
-                "(mesi, anni indietro). Usa SEMPRE questo tool quando l'utente chiede di qualcosa "
-                "che ha visto/letto/sentito/fatto, anche se molto vecchio. Usa keyword corte e "
-                "specifiche. Combina ricerca semantica + match esatto. Restituisce risultati "
-                "ordinati per rilevanza con timestamp, app/sorgente, contenuto."
+                "Cerca semanticamente nell'INTERO archivio storico dell'utente, su TRE fonti "
+                "insieme: 1) screenshot OCR (cosa ha visto), 2) trascrizioni audio (cosa ha "
+                "sentito/detto), 3) TRASCRIZIONI DI PAGINE WEB catturate dall'estensione browser "
+                "(testo completo delle pagine visitate). Nessun limite temporale, copre tutto il "
+                "database. Usa SEMPRE questo tool quando l'utente chiede di qualcosa che ha visto/"
+                "letto/sentito/fatto online o no — incluso il CONTENUTO di una pagina/articolo/"
+                "documento web (le pagine web hanno il testo PIENO, molto più ricco dell'OCR). "
+                "Keyword corte e specifiche. Risultati ordinati per rilevanza, etichettati come "
+                "'Screenshot' [ss:ID], 'Audio' [au:ID] o 'Pagina web' [web:ID]."
             ),
             "parameters": {
                 "type": "object",
@@ -316,19 +319,64 @@ TOOLS = [
         "function": {
             "name": "list_by_date_range",
             "description": (
-                "Lista attività in un range di date specifico — copre QUALSIASI periodo, "
-                "anche mesi/anni fa. Usa per domande tipo 'il mese scorso', 'a marzo', "
-                "'tra il 5 e il 10 aprile'. Date in formato ISO (YYYY-MM-DD)."
+                "Lista screenshot/audio in un intervallo specifico — QUALSIASI periodo, anche "
+                "mesi/anni fa. Usa per 'il mese scorso', 'a marzo', 'tra il 5 e il 10 aprile'. "
+                "ACCETTA ANCHE L'ORA: passa un datetime ISO completo (YYYY-MM-DDTHH:MM:SS) per "
+                "una FINESTRA PRECISA — fondamentale per 'cosa si sentiva MENTRE facevo X': "
+                "trova prima l'orario di X, poi chiama qui con kind='audio' e quell'intervallo. "
+                "Gli orari sono nello stesso formato dei timestamp restituiti dai tool (UTC), "
+                "quindi riusa i ts che hai già visto."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "start": {"type": "string", "description": "Data inizio inclusa, formato YYYY-MM-DD"},
-                    "end":   {"type": "string", "description": "Data fine inclusa, formato YYYY-MM-DD"},
-                    "kind":  {"type": "string", "enum": ["all", "screenshot", "audio"], "default": "all"},
+                    "start": {"type": "string", "description": "Inizio incluso: YYYY-MM-DD (giorno intero) oppure YYYY-MM-DDTHH:MM:SS (istante preciso)"},
+                    "end":   {"type": "string", "description": "Fine inclusa: YYYY-MM-DD oppure YYYY-MM-DDTHH:MM:SS"},
+                    "kind":  {"type": "string", "enum": ["all", "screenshot", "audio"], "default": "all", "description": "Usa 'audio' per le trascrizioni in una finestra."},
                     "limit": {"type": "integer", "default": 100},
                 },
                 "required": ["start", "end"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_system_events",
+            "description": (
+                "Eventi di AZIONI sul PC registrati da Déjà (NON screenshot/audio): app "
+                "aperte/chiuse, app in primo piano, file creati/eliminati/spostati, programmi "
+                "installati/disinstallati, unità USB, rete, sospensione/ripresa, blocco "
+                "sessione, cambio orario, download, tab e pagine visitate.\n"
+                "USA QUESTO (non gli screenshot) per QUALSIASI domanda su quando/quante volte "
+                "l'utente ha aperto/chiuso/usato un'app o un file, cosa ha scaricato/installato, "
+                "ecc. Esempi: 'a che ora ho aperto e chiuso Chrome?' → category='process', "
+                "subject='chrome' (vedrai le righe action=start e action=stop con l'orario); "
+                "'quante volte ho aperto Spotify oggi?' → category='process', action='start', "
+                "subject='spotify'; 'qual è la PRIMA volta che ho aperto X?' → subject='X', "
+                "order='asc', limit piccolo.\n"
+                "FILTRA con subject invece di scorrere lunghe liste. NOTA: la cattura eventi è "
+                "opzionale e OFF di default — se non trovi nulla, l'utente potrebbe non averla "
+                "attivata in Impostazioni → Eventi."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hours": {"type": "integer", "description": "Finestra recente in ore (alternativa a start/end). Default 24.", "default": 24},
+                    "start": {"type": "string", "description": "Data inizio inclusa YYYY-MM-DD (prevale su hours). Usa la data ODIERNA fornita per calcolare 'oggi'/'ieri'."},
+                    "end":   {"type": "string", "description": "Data fine inclusa YYYY-MM-DD (opzionale; se assente = stessa di start)"},
+                    "category": {"type": "string",
+                                 "description": "Filtro categoria. Per app aperte/chiuse usa 'process'.",
+                                 "enum": ["all", "process", "focus", "file", "install", "clock",
+                                          "power", "session", "device", "network",
+                                          "download", "tab", "visit"],
+                                 "default": "all"},
+                    "subject": {"type": "string", "description": "Filtro testo su nome app/file/URL (match parziale). ES: 'chrome', 'fattura.pdf'. È il modo MIGLIORE per trovare l'evento giusto."},
+                    "action": {"type": "string", "description": "Filtro azione esatta: per i processi 'start' (apertura) o 'stop' (chiusura); per i file 'created'/'deleted'/'moved'; per i download 'started'/'completed'."},
+                    "order": {"type": "string", "enum": ["asc", "desc"], "default": "desc", "description": "'asc' = dal più vecchio (per 'prima volta che…'), 'desc' = più recente prima (default)."},
+                    "include_hidden": {"type": "boolean", "default": False, "description": "Includere processi background/sistema/Déjà (di solito NO)."},
+                    "limit": {"type": "integer", "default": 100, "description": "Max risultati (max 500). Con un buon subject ne bastano pochi."},
+                },
             },
         },
     },
@@ -352,13 +400,26 @@ def _fmt_results(results, max_chars=500):
     out = []
     for r in results:
         ts = r["ts"][:19].replace("T", " ")
-        if r.get("type") == "screenshot":
+        t = r.get("type")
+        if t == "screenshot":
             body = (r.get("text") or "").strip()[:max_chars]
             ref = f"[ss:{r['id']}]"
             out.append(f"{ref} Screenshot @ {ts} | App: {r.get('app','?')}\n{body}")
+        elif t == "web":
+            # Pagina web catturata dall'estensione: titolo + URL + TESTO della
+            # pagina. Prima finivano nel ramo audio → testo vuoto → ignorate.
+            body = (r.get("text") or "").strip()[:max_chars]
+            title = (r.get("title") or "").strip()
+            url = (r.get("url") or "").strip()
+            ref = f"[web:{r['id']}]"
+            head = f"{ref} Pagina web @ {ts} | {title or r.get('domain','')}"
+            if url:
+                head += f" | {url}"
+            out.append(f"{head}\n{body}")
         else:
             body = (r.get("transcript") or "").strip()[:max_chars]
-            src = "microfono" if r.get("source") == "mic" else "sistema"
+            src = ("microfono (voce utente)" if r.get("source") == "mic"
+                   else "audio di sistema (altoparlanti: altri o media)")
             ref = f"[au:{r['id']}]"
             out.append(f"{ref} Audio @ {ts} | Sorgente: {src}\n{body}")
     return "\n\n---\n\n".join(out)
@@ -397,10 +458,25 @@ def _tool_list_recent(args):
             (cutoff, limit),
         ):
             txt = (row[3] or "").strip().replace("\n", " ")[:200]
-            src = "mic" if row[2] == "mic" else "pc"
-            lines.append(f"[au:{row[0]}] {row[1][:19]} | {src}: {txt}")
+            lines.append(f"[au:{row[0]}] {row[1][:19]} | {_audio_src_label(row[2])}: {txt}")
     conn.close()
     return "\n".join(lines) if lines else f"Nessuna attività nelle ultime {hours}h."
+
+def _norm_bound(v, is_end):
+    """Normalizza un estremo del range: 'YYYY-MM-DD' → giorno intero; un ISO con
+    'T' → istante preciso (finestra fine). Aggiunge TZ UTC se assente."""
+    v = (v or "").strip()
+    if "T" in v:
+        if "+" not in v and "Z" not in v[10:]:
+            v += "+00:00"
+        return v
+    return v + ("T23:59:59+00:00" if is_end else "T00:00:00+00:00")
+
+
+def _audio_src_label(source):
+    # mic = voce dell'utente; system = altoparlanti (altra persona OPPURE media)
+    return "microfono(utente)" if source == "mic" else "sistema(altoparlanti)"
+
 
 def _tool_list_by_date_range(args):
     start = str(args.get("start") or "").strip()
@@ -409,17 +485,18 @@ def _tool_list_by_date_range(args):
     if kind not in ("all", "screenshot", "audio"): kind = "all"
     limit = min(max(1, _safe_int(args.get("limit"), 100)), 500)
     if not start or not end:
-        return "Parametri 'start' e 'end' richiesti (formato YYYY-MM-DD)."
-    # Normalizza a ISO datetime con TZ UTC
-    start_iso = start + "T00:00:00+00:00"
-    end_iso   = end   + "T23:59:59+00:00"
+        return "Parametri 'start' e 'end' richiesti (YYYY-MM-DD o YYYY-MM-DDTHH:MM:SS)."
+    start_iso = _norm_bound(start, is_end=False)
+    end_iso   = _norm_bound(end, is_end=True)
     conn = get_conn(); c = conn.cursor()
     lines = []
+    ss_n = au_n = 0
     if kind in ("all", "screenshot"):
         for row in c.execute(
             "SELECT id, ts, app, text FROM screenshots WHERE ts >= ? AND ts <= ? ORDER BY ts DESC LIMIT ?",
             (start_iso, end_iso, limit),
         ):
+            ss_n += 1
             txt = (row[3] or "").strip().replace("\n", " ")[:200]
             lines.append(f"[ss:{row[0]}] {row[1][:19]} | {row[2] or '?'}: {txt}")
     if kind in ("all", "audio"):
@@ -427,11 +504,75 @@ def _tool_list_by_date_range(args):
             "SELECT id, ts, source, transcript FROM audio_segments WHERE ts >= ? AND ts <= ? ORDER BY ts DESC LIMIT ?",
             (start_iso, end_iso, limit),
         ):
+            au_n += 1
             txt = (row[3] or "").strip().replace("\n", " ")[:200]
-            src = "mic" if row[2] == "mic" else "pc"
-            lines.append(f"[au:{row[0]}] {row[1][:19]} | {src}: {txt}")
+            lines.append(f"[au:{row[0]}] {row[1][:19]} | {_audio_src_label(row[2])}: {txt}")
     conn.close()
-    return "\n".join(lines) if lines else f"Nessuna attività tra {start} e {end}."
+    if not lines:
+        return f"Nessuna attività tra {start} e {end}."
+    out = "\n".join(lines)
+    # Avviso troncamento: i risultati sono i PIÙ RECENTI del periodo; se hit del
+    # limite, ci sono altri dati più vecchi non mostrati → il modello deve
+    # restringere (es. a un solo giorno) invece di concludere "non c'è nulla".
+    if ss_n >= limit or au_n >= limit:
+        out += (f"\n\n[NB: risultati TRONCATI a {limit} (solo i più recenti del periodo). "
+                "Ci sono altri dati più vecchi non mostrati: restringi a un giorno/finestra più "
+                "piccola o alza 'limit' per vederli.]")
+    return out
+
+def _tool_list_system_events(args):
+    cats = ("process", "focus", "file", "install", "clock", "power", "session",
+            "device", "network", "download", "tab", "visit")
+    cat = str(args.get("category", "all") or "all").strip().lower()
+    if cat not in cats: cat = "all"
+    limit = min(max(1, _safe_int(args.get("limit"), 100)), 500)
+    subject = str(args.get("subject") or "").strip()
+    action = str(args.get("action") or "").strip().lower()
+    order = "ASC" if str(args.get("order") or "desc").strip().lower() == "asc" else "DESC"
+    include_hidden = bool(args.get("include_hidden"))
+    start = str(args.get("start") or "").strip()
+    end   = str(args.get("end") or "").strip()
+    if start:
+        start_iso = start + "T00:00:00+00:00"
+        end_iso = (end or start) + "T23:59:59+00:00"
+    else:
+        hours = max(1, _safe_int(args.get("hours"), 24))
+        start_iso = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        end_iso = "9999"
+    conn = get_conn(); c = conn.cursor()
+    # Di default esclude i processi background/sistema/Déjà (hidden=1): l'utente
+    # chiede cosa HA FATTO, non il rumore di servizi e helper interni.
+    sql = "SELECT id, ts, source, category, action, subject, text FROM system_events WHERE ts >= ? AND ts <= ?"
+    params = [start_iso, end_iso]
+    if not include_hidden:
+        sql += " AND hidden = 0"
+    if cat != "all":
+        sql += " AND category = ?"; params.append(cat)
+    if action:
+        sql += " AND LOWER(action) = ?"; params.append(action)
+    if subject:
+        # match su subject (exe/path/url) E sul testo leggibile → trova l'app
+        # giusta senza dover scorrere centinaia di righe.
+        like = f"%{subject}%"
+        sql += " AND (subject LIKE ? OR text LIKE ?)"; params.extend([like, like])
+    # ASC = dal più vecchio (per 'prima volta che…'); DESC = più recente prima.
+    sql += f" ORDER BY ts {order} LIMIT ?"; params.append(limit)
+    lines = []
+    for row in c.execute(sql, params):
+        subj = (row[5] or "").strip().replace("\n", " ")[:120]
+        txt = (row[6] or "").strip().replace("\n", " ")[:200]
+        lines.append(f"{row[1][:19]} | {row[3]}/{row[4]}: {txt}" + (f" ({subj})" if subj and subj not in txt else ""))
+    conn.close()
+    if lines:
+        hdr = f"{len(lines)} eventi (ordine {'crescente' if order == 'ASC' else 'decrescente'} per data):\n"
+        return hdr + "\n".join(lines)
+    msg = "Nessun evento corrisponde ai filtri"
+    if subject:
+        msg += f" (subject~'{subject}')"
+    msg += (". Se la categoria eventi non è mai stata attivata in Impostazioni → "
+            "Eventi, NON ci sono dati: avvisa l'utente invece di insistere. "
+            "Altrimenti prova ad allargare il periodo o togliere il filtro subject.")
+    return msg
 
 def _tool_memory_stats(_args):
     conn = get_conn(); c = conn.cursor()
@@ -461,10 +602,25 @@ def _execute_tool(name, args):
     try:
         if not isinstance(args, dict):
             args = {}
-        if name == "search_memories":     return _tool_search_memories(args)
-        if name == "list_recent":         return _tool_list_recent(args)
-        if name == "list_by_date_range":  return _tool_list_by_date_range(args)
-        if name == "memory_stats":        return _tool_memory_stats(args)
+        # Match tollerante: alcuni modelli (es. MiniMax) storpiano il nome con
+        # maiuscole/underscore diversi ('list_By_Date_Range', 'list_ystem_events').
+        # Normalizza a minuscolo senza separatori e mappa al tool reale.
+        norm = "".join(ch for ch in (name or "").lower() if ch.isalnum())
+        dispatch = {
+            "searchmemories":   _tool_search_memories,
+            "listrecent":       _tool_list_recent,
+            "listbydaterange":  _tool_list_by_date_range,
+            "listsystemevents": _tool_list_system_events,
+            "memorystats":      _tool_memory_stats,
+        }
+        fn = dispatch.get(norm)
+        if fn is not None:
+            return fn(args)
+        # fuzzy: nome storpiato/typo (es. 'listystemevents') → match più vicino
+        import difflib
+        m = difflib.get_close_matches(norm, list(dispatch.keys()), n=1, cutoff=0.72)
+        if m:
+            return dispatch[m[0]](args)
         return f"Tool sconosciuto: {name}"
     except Exception as e:
         return f"Errore esecuzione tool {name}: {e}"
@@ -491,34 +647,118 @@ def _trim_history(messages, max_tokens):
 
 # ── Streaming chat with tool calls ─────────────────────────────────
 SYSTEM_PROMPT = (
-    "Sei Déjà, assistente AI personale dell'utente. "
+    "Sei Déjà, assistente AI personale dell'utente.\n\n"
+    "════ REGOLA #0 — NON INVENTARE MAI (la più importante) ════\n"
+    "Tu NON hai memoria delle attività dell'utente: la conosci SOLO attraverso i risultati "
+    "dei tool. Quindi:\n"
+    "• È ASSOLUTAMENTE VIETATO produrre riassunti, elenchi, frasi citate, nomi, prezzi, "
+    "quantità, orari, titoli o QUALSIASI dettaglio concreto che non sia LETTERALMENTE presente "
+    "in un risultato di tool appena ricevuto. Niente esempi plausibili, niente 'tipicamente', "
+    "niente riempire i vuoti.\n"
+    "• Per OGNI domanda su ricordi/conversazioni/attività/contenuti DEVI prima chiamare un "
+    "tool e aspettarne il risultato. Se non hai (ancora) chiamato un tool, NON rispondere nel "
+    "merito: chiama il tool. Mai rispondere 'a memoria' o per intuizione.\n"
+    "• Se i tool non restituiscono nulla, o restituiscono poco, DILLO chiaramente "
+    "('Non ho trovato registrazioni per ieri') invece di inventare. Una risposta vuota onesta "
+    "è SEMPRE meglio di una inventata. Mai abbellire o estrapolare oltre il testo grezzo.\n"
+    "• Riporta i contenuti il più possibile VERBATIM dai risultati (con i tag [ss:ID]/[au:ID]). "
+    "Se un dato non c'è nel testo del tool, NON esiste per te.\n"
+    "═══════════════════════════════════════════════════════════\n\n"
     "Hai accesso COMPLETO e SENZA LIMITI TEMPORALI alla sua memoria digitale:\n"
-    "- screenshot con OCR (testo estratto da ogni schermata)\n"
-    "- trascrizioni audio (microfono + audio sistema)\n"
+    "- screenshot con OCR (testo estratto da ogni schermata) → cosa ha VISTO/letto\n"
+    "- trascrizioni audio (microfono + audio sistema) → cosa ha SENTITO/detto\n"
+    "- eventi di sistema/browser → le AZIONI sul PC (app aperte/chiuse, file, programmi "
+    "installati, USB, rete, standby, blocco sessione, download, tab, pagine visitate)\n"
     "L'archivio copre TUTTO lo storico — può estendersi a mesi o anni. "
     "NON ASSUMERE MAI un limite temporale arbitrario (es. '7 giorni'). "
     "Se non sai quanto in là va l'archivio, chiama 'memory_stats'.\n\n"
     "TOOL DISPONIBILI:\n"
-    "- 'search_memories(query, limit=30)' → ricerca semantica + esatta sull'INTERO database, "
-    "nessun filtro temporale. Usa sempre questo per domande tematiche, anche su cose vecchie.\n"
-    "- 'list_recent(hours, kind)' → SOLO ultime ore (max sensato 168=7gg). Per finestre più "
-    "ampie usa list_by_date_range.\n"
-    "- 'list_by_date_range(start, end, kind)' → range date custom (qualsiasi periodo).\n"
+    "- 'search_memories(query, limit)' → ricerca semantica+esatta su screenshot+audio, "
+    "INTERO database, nessun filtro temporale. Per domande sul CONTENUTO (cosa ho letto/"
+    "visto/detto su un tema), anche vecchio.\n"
+    "- 'list_recent(hours, kind)' → screenshot/audio nelle ultime ore (max 168=7gg).\n"
+    "- 'list_by_date_range(start, end, kind)' → screenshot/audio in un range di date.\n"
+    "- 'list_system_events(category, subject, action, order, start/end|hours)' → AZIONI sul "
+    "PC. Usa SEMPRE questo (NON gli screenshot) per: quando/quante volte ho aperto o chiuso "
+    "un'app, cosa ho scaricato, quando ho installato/disinstallato qualcosa, file creati/"
+    "cancellati, USB collegata, quando ho bloccato il PC, ecc. Filtra con subject (nome app/"
+    "file) e action (start=apertura, stop=chiusura).\n"
     "- 'memory_stats()' → estensione totale archivio (date primo/ultimo screen+audio).\n\n"
+    "INSTRADAMENTO (scegli il tool giusto PRIMA di rispondere):\n"
+    "• 'a che ora ho aperto/chiuso X', 'quante volte ho usato X', 'che app ho aperto', "
+    "'cosa ho scaricato/installato', 'quando ho collegato la chiavetta' → list_system_events "
+    "(category='process' per app; subject=nome). NON cercare negli screenshot per queste cose: "
+    "lì NON c'è l'orario di apertura/chiusura.\n"
+    "• 'cosa diceva quella pagina/quel articolo che leggevo', 'dov'è che ho letto X', "
+    "'riassumi la pagina su Y', 'di cosa parlavo' → search_memories. Le PAGINE WEB visitate "
+    "sono salvate col TESTO COMPLETO (estensione browser): per il contenuto di ciò che l'utente "
+    "leggeva online sono la fonte migliore, molto più dell'OCR. Non ignorarle: se tra i risultati "
+    "ci sono righe 'Pagina web [web:ID]', USALE e citale.\n\n"
+    "AUDIO — due sorgenti, significato diverso:\n"
+    "• 'microfono (voce utente)' = sta parlando L'UTENTE (o chi gli sta accanto fisicamente).\n"
+    "• 'audio di sistema (altoparlanti)' = ciò che usciva dalle casse: può essere un'ALTRA "
+    "persona (es. in chiamata/gioco online) MA ANCHE un video YouTube, musica, audio di gioco. "
+    "NON dare per scontato che sia una conversazione: capiscilo dal contenuto della trascrizione "
+    "e dagli screenshot vicini (es. se la finestra era YouTube → è un video, non un dialogo). "
+    "Quando riferisci, distingui: 'tu dicevi…' (microfono) vs 'dalle casse/nel video si sentiva…' "
+    "(sistema), e dì se sembra dialogo o media.\n\n"
+    "DOMANDE 'cosa si diceva / di che si parlava MENTRE facevo X' (es. 'mentre giocavo ad Apex'):\n"
+    "L'audio quasi MAI contiene il nome del gioco/app, quindi cercare 'apex' tra le trascrizioni "
+    "fallisce — NON concludere 'non c'è audio'. Procedi a due passi:\n"
+    "  1) Trova QUANDO l'utente faceva X: list_system_events(category='process', subject='X') per "
+    "gli orari apri/chiudi, oppure search_memories('X') per gli screenshot (leggine i timestamp).\n"
+    "  2) Prendi l'AUDIO di quella finestra: list_by_date_range(start, end, kind='audio') passando "
+    "l'intervallo trovato CON l'ora (es. start='2026-06-10T20:10:00', end='2026-06-10T21:00:00').\n"
+    "  3) Riassumi le trascrizioni in quella finestra, distinguendo microfono vs sistema.\n\n"
     "REGOLE:\n"
-    "1. Se utente chiede di cose vecchie (settimane/mesi/anni fa) → usa search_memories o "
-    "list_by_date_range. MAI rispondere 'ho solo gli ultimi N giorni'.\n"
-    "2. Prima di dire 'non ho dati per periodo X' → chiama memory_stats per VERIFICARE.\n"
-    "3. Combina più chiamate se serve (es. memory_stats poi search_memories).\n"
-    "4. Cita timestamp e app/sorgente nelle risposte.\n"
-    "5. **CITAZIONI FONTI**: ogni volta che riferisci un fatto preso da un ricordo, "
-    "inserisci subito DOPO la frase il tag `[ss:ID]` per screenshot o `[au:ID]` per audio "
-    "(usa l'ID esatto restituito dal tool). L'UI li trasforma in card cliccabili. "
-    "Esempio: 'Hai parlato di Python verso le 14:30 [au:512]. Poco dopo hai aperto "
-    "VS Code [ss:3421].' Cita SEMPRE quando possibile — è il valore aggiunto.\n"
-    "6. Rispondi sempre in italiano, conciso. Se non trovi nulla DAVVERO, dillo dopo "
-    "aver provato con keyword diverse."
+    "1. DATE: usa la DATA ODIERNA indicata sotto come riferimento per 'oggi/ieri/questa "
+    "settimana'. 'oggi' = la data odierna; 'ieri' = il giorno PRIMA; calcola i range da lì. "
+    "Per UN SOLO giorno (ieri, oggi, una data precisa) metti lo STESSO valore in start E end "
+    "(es. ieri → start='2026-06-10', end='2026-06-10'): NON mettere il giorno dopo in end, o "
+    "includi giorni sbagliati. Se un tool risponde 'troncato', i risultati sono solo i più "
+    "recenti del periodo: RESTRINGI a un giorno/intervallo più piccolo (NON concludere 'non ci "
+    "sono dati' solo perché vedi un altro giorno). In dubbio sull'estensione dati → memory_stats.\n"
+    "2. Se utente chiede di cose vecchie → usa il tool con un range date adatto. MAI dire "
+    "'ho solo gli ultimi N giorni'. Prima di dire 'non ho dati per il periodo X' → VERIFICA "
+    "con memory_stats (o list_system_events allargando il periodo).\n"
+    "3. NON sfidarti dei primi 100 risultati a caso: se cerchi una cosa specifica RESTRINGI "
+    "(subject, action, category, range di date) invece di scorrere liste lunghe. Per 'la PRIMA "
+    "volta' usa order='asc'; per 'l'ultima/più recente' order='desc'. Se un tool tronca i "
+    "risultati e non trovi ciò che serve, rifai la chiamata con filtri più stretti o un "
+    "periodo diverso, NON arrenderti al primo tentativo.\n"
+    "4. Combina più chiamate se serve (es. per 'aperto e poi chiuso Chrome' una con "
+    "action='start' e una con action='stop', o una sola e leggi entrambe le righe). MA non "
+    "ripetere la STESSA chiamata con argomenti quasi identici: se un tool torna VUOTO, CAMBIA "
+    "approccio (altra fonte, altro filtro, altro periodo), non riprovarlo uguale. Hai poche "
+    "chiamate a disposizione: usale bene. Per 'di cosa parlavo mentre facevo X', se gli eventi "
+    "non danno l'orario (cattura magari OFF in quel periodo), passa SUBITO a search_memories('X') "
+    "sugli screenshot per trovare la finestra, poi list_by_date_range(kind='audio').\n"
+    "5. Cita timestamp e app/sorgente nelle risposte.\n"
+    "6. **CITAZIONI FONTI**: per fatti presi da uno SCREENSHOT, AUDIO o PAGINA WEB inserisci "
+    "subito dopo la frase il tag `[ss:ID]`, `[au:ID]` o `[web:ID]` (ID esatto dal tool); l'UI li "
+    "rende card cliccabili (la card web apre l'URL). Per gli eventi di sistema NON usare tag: "
+    "cita solo l'orario in chiaro.\n"
+    "7. Rispondi sempre in italiano, conciso. Se davvero non trovi nulla dopo aver provato "
+    "filtri/keyword diversi, dillo — e se è una domanda da eventi e non trovi nulla, ricorda "
+    "che la cattura eventi è OFF di default e va attivata in Impostazioni → Eventi.\n"
+    "8. STILE OUTPUT: scrivi SOLO la risposta finale, pulita e diretta. NON mostrare il tuo "
+    "ragionamento passo-passo, NON scrivere meta-frasi tipo 'vedo che…', 'devo controllare…', "
+    "'sembra che…'. MAI ripetere la stessa frase. Usa pochi bullet brevi quando aiuta. Quando "
+    "riassumi tante trascrizioni, raggruppa per tema/momento in 3-6 punti, non elencare ogni "
+    "frammento."
 )
+
+
+def _now_context() -> str:
+    """Ancora temporale iniettata nel system prompt: senza una 'data odierna'
+    esplicita il modello sbaglia i range (oggi/ieri/settimana scorsa)."""
+    try:
+        now = datetime.now().astimezone()
+        giorni = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+        return (f"\n\nDATA ODIERNA: {giorni[now.weekday()]} {now.strftime('%Y-%m-%d')}, "
+                f"ora locale {now.strftime('%H:%M')}. Usala per ogni calcolo di date.")
+    except Exception:
+        return ""
 
 def chat_stream(history, message):
     """
@@ -538,7 +778,8 @@ def chat_stream(history, message):
         yield ("done", None)
         return
 
-    system_loc = SYSTEM_PROMPT + f"\n\nIMPORTANTE: rispondi sempre in {i18n.ai_language_name()}."
+    system_loc = (SYSTEM_PROMPT + _now_context()
+                  + f"\n\nIMPORTANTE: rispondi sempre in {i18n.ai_language_name()}.")
     messages = [{"role": "system", "content": system_loc}] + list(history) + [
         {"role": "user", "content": message}
     ]
@@ -546,20 +787,36 @@ def chat_stream(history, message):
     budget = AI_CONTEXT_TOKENS - AI_MAX_TOKENS - 4000
     messages = _trim_history(messages, budget)
 
-    for _ in range(5):  # max 5 tool-call iterations
+    for _it in range(8):  # max 8 tool-call iterations (multi-step: 2-passi audio, fallback)
+        # Primo turno: FORZA una chiamata tool (tool_choice="required") così il
+        # modello non può rispondere "a memoria" inventando. Fallback se
+        # l'endpoint non supporta il parametro. Iterazioni successive: "auto"
+        # (deve poter chiudere con la risposta finale).
+        # temperature 0.45 + frequency_penalty: evitano i loop di ripetizione
+        # (con temp troppo bassa + contesto ripetitivo il modello si incarta).
+        kwargs = dict(model=model, messages=messages, tools=TOOLS, stream=True,
+                      max_tokens=AI_MAX_TOKENS, temperature=0.45, frequency_penalty=0.3)
+        if _it == 0:
+            kwargs["tool_choice"] = "required"
         try:
-            stream = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=TOOLS,
-                stream=True,
-                max_tokens=AI_MAX_TOKENS,
-                temperature=0.6,
-            )
+            stream = client.chat.completions.create(**kwargs)
         except Exception as e:
-            yield ("error", f"API error: {e}")
-            yield ("done", None)
-            return
+            # Alcuni endpoint non accettano tool_choice="required" e/o
+            # frequency_penalty: riprova una volta SENZA i parametri opzionali.
+            had_opt = ("tool_choice" in kwargs) or ("frequency_penalty" in kwargs)
+            kwargs.pop("tool_choice", None)
+            kwargs.pop("frequency_penalty", None)
+            if had_opt:
+                try:
+                    stream = client.chat.completions.create(**kwargs)
+                except Exception as e2:
+                    yield ("error", f"API error: {e2}")
+                    yield ("done", None)
+                    return
+            else:
+                yield ("error", f"API error: {e}")
+                yield ("done", None)
+                return
 
         text_buf = []
         tool_acc = {}  # index -> {id, name, args}

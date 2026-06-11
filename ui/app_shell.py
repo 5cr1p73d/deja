@@ -33,7 +33,7 @@ from modules import ai_assistant
 # Riuso da window.py (componenti standalone, già importato dall'app via tray).
 from ui.window import (
     WaveformWidget, _rounded_pixmap, _fmt_time, SearchWorker, ChatWorker, ChatPage,
-    AssistantTurnBubble, EmbedScreenshotCard, EmbedAudioCard, FullscreenViewer,
+    AssistantTurnBubble, EmbedScreenshotCard, EmbedAudioCard, EmbedWebCard, FullscreenViewer,
     _md_to_html, _strip_refs, _REF_RE,
 )
 
@@ -54,6 +54,15 @@ HUE = {
     "audio": theme.AMBER_RGB,
     "note": theme.VIOLET_RGB,
     "code": (96, 165, 250),
+    "sys": (96, 165, 250),
+}
+
+# etichette italiane per categoria evento di sistema/browser
+SYS_CAT_LABEL = {
+    "process": "App", "focus": "Primo piano", "file": "File",
+    "install": "Programmi", "clock": "Orologio", "power": "Alimentazione",
+    "session": "Sessione", "device": "Unità", "network": "Rete",
+    "download": "Download", "tab": "Tab browser", "visit": "Visita web",
 }
 
 # Cache miniature screenshot per id. Lazy: si decodificano SOLO le righe visibili
@@ -142,7 +151,7 @@ class TimelineDelegate(QStyledItemDelegate):
         media = QRectF(card.left() + 12, card.center().y() - MH / 2, MW, MH)
         mp = QPainterPath(); mp.addRoundedRect(media, 8, 8)
         kind = idx.data(TL_KIND)
-        if kind in ("audio", "note"):
+        if kind in ("audio", "note", "sys"):
             fill = QColor(hue); fill.setAlpha(40)
             p.fillPath(mp, fill)
             p.setBrush(Qt.BrushStyle.NoBrush); p.setPen(QPen(QColor(hue.red(), hue.green(), hue.blue(), 80), 1)); p.drawPath(mp)
@@ -152,6 +161,15 @@ class TimelineDelegate(QStyledItemDelegate):
                 cx = media.center().x(); cy = media.center().y(); sx = cx - (len(hs) - 1) * gi / 2
                 for i, bh in enumerate(hs):
                     p.drawLine(QPointF(sx + i * gi, cy - bh / 2), QPointF(sx + i * gi, cy + bh / 2))
+            elif kind == "sys":
+                # fulmine (eventi di sistema)
+                cx = media.center().x(); cy = media.center().y()
+                bolt = QPainterPath(QPointF(cx + 2, cy - 9))
+                bolt.lineTo(QPointF(cx - 6, cy + 2)); bolt.lineTo(QPointF(cx - 1, cy + 2))
+                bolt.lineTo(QPointF(cx - 2, cy + 9)); bolt.lineTo(QPointF(cx + 6, cy - 2))
+                bolt.lineTo(QPointF(cx + 1, cy - 2)); bolt.closeSubpath()
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawPath(bolt)
             else:
                 cy = media.center().y(); lx = media.left() + 16; rx = media.right() - 16
                 for dy in (-6, 0, 6):
@@ -205,6 +223,9 @@ ICONS = {
     # detail / badge
     "screen": '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
     "note": '<path d="M6 4h9l5 5v11H6z"/><path d="M9 13h6M9 16h4"/>',
+    "sys": '<path d="M13 2L4 14h6l-1 8 9-12h-6z"/>',
+    "eye": '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+    "eyeoff": '<path d="M3 3l18 18"/><path d="M10.6 5.1A10.9 10.9 0 0 1 12 5c6.5 0 10 7 10 7a18 18 0 0 1-3.1 4M6.6 6.6A18 18 0 0 0 2 12s3.5 7 10 7a10.9 10.9 0 0 0 4.3-.9"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
     "audio": '<rect x="9" y="3" width="6" height="10" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
     "web": '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
     # azioni
@@ -780,12 +801,26 @@ class AppShell(QWidget):
         seg = _SegBar()
         self._tl_seg = {}; self._tl_seg_keys = []
         for key, label, dot in (("all", "Tutto", None), ("screenshot", "Schermo", theme.EMERALD_RGB),
-                                ("audio", "Audio", theme.AMBER_RGB)):
+                                ("audio", "Audio", theme.AMBER_RGB),
+                                ("system", "Eventi", (96, 165, 250))):
             b = SegButton(label, dot=dot, on=(key == "all"))
             b.clicked.connect(lambda _=False, k=key: self._set_tl_filter(k))
             self._tl_seg[key] = b; self._tl_seg_keys.append(key); seg.add_button(b)
         self._seg_bar = seg
         tl.addWidget(seg)
+
+        # Toggle "mostra nascosti": appare solo col filtro Eventi. Di default i
+        # processi background/sistema/Déjà sono nascosti (no infodump); il
+        # bottone rivela TUTTO ciò che è stato registrato.
+        self._tl_show_hidden = False
+        self._tl_hidebtn = QPushButton()
+        self._tl_hidebtn.setCheckable(True)
+        self._tl_hidebtn.setFixedHeight(36)
+        self._tl_hidebtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._tl_hidebtn.setVisible(False)
+        self._tl_hidebtn.clicked.connect(self._toggle_show_hidden)
+        self._sync_hidebtn()
+        tl.addWidget(self._tl_hidebtn)
         ml.addWidget(top)
 
         self._day_label = QLabel("Caricamento cronologia…")
@@ -951,6 +986,35 @@ class AppShell(QWidget):
         # pillola che slida sul filtro attivo
         if key in self._tl_seg_keys:
             self._seg_bar.set_active(self._tl_seg_keys.index(key), animate=True)
+        # il toggle "mostra nascosti" ha senso solo sugli Eventi
+        if hasattr(self, "_tl_hidebtn"):
+            self._tl_hidebtn.setVisible(key == "system")
+        self._build_rows()
+        for i in range(self.timeline.count()):
+            it = self.timeline.item(i)
+            if it and not it.data(TL_HOUR):
+                self.timeline.setCurrentRow(i); break
+        QTimer.singleShot(0, lambda: self._ensure_visible_thumbs(self.timeline))
+
+    def _sync_hidebtn(self):
+        """Aggiorna icona/testo/stile del toggle 'mostra nascosti'."""
+        on = self._tl_show_hidden
+        icon = "eye" if on else "eyeoff"
+        label = "  Nascondi background" if on else "  Mostra nascosti"
+        self._tl_hidebtn.setIcon(QIcon(_svg_pixmap(icon, theme.INK_SOFT, 15)))
+        self._tl_hidebtn.setText(label)
+        self._tl_hidebtn.setToolTip(
+            "Sto mostrando anche i processi di sistema/Déjà" if on
+            else "Mostro solo le app con finestra; clicca per vedere tutto")
+        self._tl_hidebtn.setStyleSheet(
+            f"QPushButton{{background:rgba(255,255,255,{'0.08' if on else '0.04'});"
+            f" color:{theme.INK if on else theme.INK_SOFT}; border:1px solid {theme.LINE};"
+            f" border-radius:10px; padding:0 12px; font-family:'{theme.SANS}'; font-size:12px;}}"
+            "QPushButton:hover{background:rgba(255,255,255,0.10);}")
+
+    def _toggle_show_hidden(self):
+        self._tl_show_hidden = not self._tl_show_hidden
+        self._sync_hidebtn()
         self._build_rows()
         for i in range(self.timeline.count()):
             it = self.timeline.item(i)
@@ -1164,6 +1228,7 @@ class AppShell(QWidget):
         self._set_subnav = {}
         subpages = (("general", "Generale", "sliders", self._build_set_general),
                     ("capture", "Cattura", "capture", self._build_set_capture),
+                    ("events", "Eventi", "sys", self._build_set_events),
                     ("privacy", "Area & Privacy", "shield", self._build_set_privacy),
                     ("ai", "Assistente AI", "spark", self._build_set_ai),
                     ("vision", "Vision", "screen", self._build_set_vision),
@@ -1305,6 +1370,51 @@ class AppShell(QWidget):
         self._s_out = self._set_combo([("Non registrare", None)] + [(n, str(i)) for i, n in loops],
                                       current=get_setting("audio_out_index", None), width=220)
         lay.addWidget(self._set_row("Audio di sistema", "Cattura ciò che esce dalle casse (loopback).", self._s_out))
+        lay.addStretch()
+        return w
+
+    def _build_set_events(self, get_setting):
+        """Eventi di sistema + eventi browser. TUTTO OFF di default: ogni
+        categoria parte a "0" e il collector la attiva live al salvataggio."""
+        w, lay = self._set_body()
+
+        def _tgl(key):
+            return ToggleSwitch((get_setting(key, "0") or "0") == "1")
+
+        lay.addWidget(self._set_section("Eventi di sistema", first=True))
+        self._s_ev_process = _tgl("sysev_process_enabled")
+        lay.addWidget(self._set_row("App aperte e chiuse", "Registra avvio e chiusura dei programmi (nome, percorso, durata).", self._s_ev_process))
+        self._s_ev_focus = _tgl("sysev_focus_enabled")
+        lay.addWidget(self._set_row("App in primo piano", "Registra quando passi da un'app all'altra (rispetta la blocklist privacy).", self._s_ev_focus))
+        self._s_ev_file = _tgl("sysev_file_enabled")
+        lay.addWidget(self._set_row("Attività sui file", "File creati, eliminati, spostati o rinominati nelle cartelle utente.", self._s_ev_file))
+        self._s_ev_file_dirs = self._set_input(get_setting("sysev_file_dirs", "") or "",
+                                               "vuoto = Desktop, Documenti, Download, …")
+        lay.addWidget(self._set_row("Cartelle osservate", "Percorsi separati da ';'. Vuoto = cartelle utente standard.", self._s_ev_file_dirs))
+        self._s_ev_install = _tgl("sysev_install_enabled")
+        lay.addWidget(self._set_row("Programmi installati", "Installazioni, aggiornamenti e disinstallazioni (nome, versione, publisher).", self._s_ev_install))
+        self._s_ev_device = _tgl("sysev_device_enabled")
+        lay.addWidget(self._set_row("Unità e dispositivi", "Chiavette USB e dischi collegati o rimossi.", self._s_ev_device))
+        self._s_ev_network = _tgl("sysev_network_enabled")
+        lay.addWidget(self._set_row("Rete", "Interfacce di rete connesse o disconnesse.", self._s_ev_network))
+        self._s_ev_power = _tgl("sysev_power_enabled")
+        lay.addWidget(self._set_row("Sospensione e ripresa", "Quando il PC va in standby e quando riprende (con durata).", self._s_ev_power))
+        self._s_ev_session = _tgl("sysev_session_enabled")
+        lay.addWidget(self._set_row("Blocco sessione", "Blocco e sblocco della sessione Windows.", self._s_ev_session))
+        self._s_ev_clock = _tgl("sysev_clock_enabled")
+        lay.addWidget(self._set_row("Cambio orario", "Modifiche all'orario di sistema.", self._s_ev_clock))
+
+        lay.addWidget(self._set_section("Eventi browser (estensione)"))
+        note = QLabel("Richiedono l'estensione browser attiva (Area & Privacy → Estensione browser).")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11px; background:transparent;")
+        lay.addWidget(note)
+        self._s_ev_download = _tgl("webev_download_enabled")
+        lay.addWidget(self._set_row("Download", "File scaricati dal browser (nome, origine, dimensione).", self._s_ev_download))
+        self._s_ev_tab = _tgl("webev_tab_enabled")
+        lay.addWidget(self._set_row("Tab", "Apertura e chiusura delle schede.", self._s_ev_tab))
+        self._s_ev_visit = _tgl("webev_visit_enabled")
+        lay.addWidget(self._set_row("Pagine visitate", "Cronologia leggera delle visite (URL e titolo, senza contenuto).", self._s_ev_visit))
         lay.addStretch()
         return w
 
@@ -1821,6 +1931,25 @@ class AppShell(QWidget):
         except Exception as e:
             errs += 1; print(f"[Set] cattura: {e}")
 
+        # ── Eventi di sistema + browser (tutto OFF di default) ──
+        try:
+            for key, tgl in (("sysev_process_enabled", self._s_ev_process),
+                             ("sysev_focus_enabled", self._s_ev_focus),
+                             ("sysev_file_enabled", self._s_ev_file),
+                             ("sysev_install_enabled", self._s_ev_install),
+                             ("sysev_device_enabled", self._s_ev_device),
+                             ("sysev_network_enabled", self._s_ev_network),
+                             ("sysev_power_enabled", self._s_ev_power),
+                             ("sysev_session_enabled", self._s_ev_session),
+                             ("sysev_clock_enabled", self._s_ev_clock),
+                             ("webev_download_enabled", self._s_ev_download),
+                             ("webev_tab_enabled", self._s_ev_tab),
+                             ("webev_visit_enabled", self._s_ev_visit)):
+                save_setting(key, "1" if tgl.isChecked() else "0")
+            save_setting("sysev_file_dirs", self._s_ev_file_dirs.text().strip())
+        except Exception as e:
+            errs += 1; print(f"[Set] eventi: {e}")
+
         # ── Privacy + estensione browser ──
         try:
             save_setting("privacy_redact", "1" if self._s_redact.isChecked() else "0")
@@ -2078,7 +2207,15 @@ class AppShell(QWidget):
             card = EmbedScreenshotCard(rid); card.clicked.connect(self._on_embed_ss_click); return card
         if kind == "au":
             card = EmbedAudioCard(rid); card.play_requested.connect(self._on_embed_audio_play); return card
+        if kind == "web":
+            card = EmbedWebCard(rid); card.clicked.connect(self._on_embed_web_click); return card
         return None
+
+    def _on_embed_web_click(self, url):
+        if url:
+            from PyQt6.QtGui import QDesktopServices
+            from PyQt6.QtCore import QUrl
+            QDesktopServices.openUrl(QUrl(url))
 
     def _on_embed_ss_click(self, sid):
         try:
@@ -2143,7 +2280,13 @@ class AppShell(QWidget):
         try:
             from db import get_conn
             with get_conn() as conn:
-                row = conn.cursor().execute("SELECT MAX(id) FROM screenshots").fetchone()
+                # Somma dei MAX(id) di tutte le sorgenti timeline: cresce a ogni
+                # nuovo record (gli id sono AUTOINCREMENT) e resta una probe economica.
+                row = conn.cursor().execute(
+                    "SELECT (SELECT IFNULL(MAX(id),0) FROM screenshots)"
+                    " + (SELECT IFNULL(MAX(id),0) FROM audio_segments)"
+                    " + (SELECT IFNULL(MAX(id),0) FROM web_pages)"
+                    " + (SELECT IFNULL(MAX(id),0) FROM system_events)").fetchone()
             mx = row[0] if row else None
         except Exception:
             return
@@ -2180,7 +2323,7 @@ class AppShell(QWidget):
     @staticmethod
     def _kind_of(r):
         t = r.get("type")
-        return {"audio": "audio", "web": "note"}.get(t, "screen")
+        return {"audio": "audio", "web": "note", "system": "sys"}.get(t, "screen")
 
     @staticmethod
     def _clock(ts_iso):
@@ -2222,6 +2365,10 @@ class AppShell(QWidget):
         if kind == "note":
             return (self._clean(r.get("title")) or self._clean(r.get("domain")) or "Pagina web"), \
                    (self._clean(r.get("domain")))
+        if kind == "sys":
+            cat = SYS_CAT_LABEL.get(r.get("category"), r.get("category") or "evento")
+            title = self._clean(r.get("text")) or f"Evento: {cat}"
+            return (title[:72] + "…") if len(title) > 72 else title, cat.lower()
         return (self._clean(r.get("app")) or "Schermata"), ""  # screen: niente OCR (rumore)
 
     def _build_rows(self):
@@ -2229,8 +2376,13 @@ class AppShell(QWidget):
         self.timeline.clear()
         flt = getattr(self, "_tl_filter", "all")
         last_key = None
+        show_hidden = getattr(self, "_tl_show_hidden", False)
         for idx, r in enumerate(self._records):
             if flt != "all" and r.get("type") != flt:
+                continue
+            # Eventi background/sistema/Déjà: nascosti di default ovunque,
+            # rivelati solo dal toggle "mostra nascosti".
+            if r.get("hidden") and not show_hidden:
                 continue
             hkey, hlabel = self._hour_header(r.get("ts", ""))
             if hkey != last_key:
@@ -2322,7 +2474,7 @@ class AppShell(QWidget):
         fm = QFontMetrics(self._detail_title.font())
         self._detail_title.setText(fm.elidedText(title or "—", Qt.TextElideMode.ElideRight, 170))
         kindlbl = {"screen": "Schermo", "audio": "Registrazione vocale",
-                   "note": "Pagina web"}.get(kind, "")
+                   "note": "Pagina web", "sys": "Evento di sistema"}.get(kind, "")
         when = self._detail_when(r.get("ts", ""))
         sub = f"{kindlbl} · {when}".strip(" ·").upper()
         fms = QFontMetrics(self._detail_sub.font())
@@ -2330,8 +2482,8 @@ class AppShell(QWidget):
 
         # badge colorato per tipo
         hue = {"screen": theme.EMERALD_RGB, "audio": theme.AMBER_RGB,
-               "note": theme.VIOLET_RGB}.get(kind, theme.VIOLET_RGB)
-        ic = {"screen": "screen", "audio": "audio", "note": "web"}.get(kind, "screen")
+               "note": theme.VIOLET_RGB, "sys": (96, 165, 250)}.get(kind, theme.VIOLET_RGB)
+        ic = {"screen": "screen", "audio": "audio", "note": "web", "sys": "sys"}.get(kind, "screen")
         hx = "#%02x%02x%02x" % hue
         self._detail_badge.setStyleSheet(
             f"background:rgba({hue[0]},{hue[1]},{hue[2]},0.14);"
@@ -2360,6 +2512,28 @@ class AppShell(QWidget):
                 f"<b style='color:{theme.INK}'>{_html.escape(ttl)}</b><br>"
                 f"<a href='{_html.escape(url)}' style='color:{theme.VIOLET}'>{_html.escape(url)}</a>"
                 f"<br><br><span style='color:#cfcfd6'>{_html.escape(text)}</span>")
+        elif kind == "sys":
+            self._show_detail_sections(shot=False, body=True, audio=False)
+            import html as _html, json as _json
+            cat = SYS_CAT_LABEL.get(r.get("category"), r.get("category") or "evento")
+            src = "estensione browser" if r.get("source") == "browser" else "sistema"
+            rows = [f"<b style='color:{theme.INK}'>{_html.escape(r.get('text') or cat)}</b>",
+                    f"<span style='color:{theme.INK_DIM}; font-size:11px'>"
+                    f"{_html.escape(cat)} · {_html.escape(r.get('action') or '')} · {_html.escape(src)}</span>"]
+            if r.get("subject"):
+                rows.append(f"<span style='color:#cfcfd6'>{_html.escape(r.get('subject'))}</span>")
+            try:
+                det = _json.loads(r.get("detail") or "{}")
+            except Exception:
+                det = {}
+            if det:
+                kv = "<br>".join(
+                    f"<span style='color:{theme.INK_DIM}'>{_html.escape(str(k))}:</span> "
+                    f"<span style='color:#cfcfd6'>{_html.escape(str(v))}</span>"
+                    for k, v in det.items())
+                rows.append(kv)
+            self._detail_body.setTextFormat(Qt.TextFormat.RichText)
+            self._detail_body.setText("<br><br>".join(rows))
         else:  # screen — preview grande, NIENTE OCR (rumore)
             self._show_detail_sections(shot=True, body=False, audio=False)
             self._load_screenshot(sid)
@@ -2378,9 +2552,14 @@ class AppShell(QWidget):
             if t0.tzinfo is None: t0 = t0.replace(tzinfo=timezone.utc)
         except Exception:
             self._ctx_wrap.setVisible(False); return
+        show_hidden = getattr(self, "_tl_show_hidden", False)
         seen = {}
         for o in self._records:
             if o is r:
+                continue
+            # coerenza con la timeline: gli eventi nascosti non contano nei chip
+            # finché non si è in modalità "mostra nascosti".
+            if o.get("hidden") and not show_hidden:
                 continue
             try:
                 t1 = datetime.fromisoformat(o.get("ts", ""))
@@ -2391,7 +2570,7 @@ class AppShell(QWidget):
                 k = self._kind_of(o)
                 seen[k] = seen.get(k, 0) + 1
         names = {"screen": ("schermo", theme.EMERALD_RGB), "audio": ("audio", theme.AMBER_RGB),
-                 "note": ("web", theme.VIOLET_RGB)}
+                 "note": ("web", theme.VIOLET_RGB), "sys": ("eventi", (96, 165, 250))}
         if not seen:
             self._ctx_wrap.setVisible(False); return
         self._ctx_wrap.setVisible(True)
@@ -2449,6 +2628,13 @@ class AppShell(QWidget):
                     "title": self._detail_title.text() or "Schermata",
                     "subtitle": f"Schermata · {when}".strip(" ·"),
                     "content": (r.get("text") or "").strip()}
+        elif kind == "sys":
+            cat = SYS_CAT_LABEL.get(r.get("category"), r.get("category") or "evento")
+            meta = {"kind": "sys", "ref": "", "glyph": "⚡", "thumb": None,
+                    "title": r.get("text") or f"Evento: {cat}",
+                    "subtitle": f"Evento di sistema · {when}".strip(" ·"),
+                    "content": "\n".join(p for p in (r.get("text"), r.get("subject"),
+                                                     r.get("detail")) if p).strip()}
         else:
             try: self.chat_page.input.setFocus()
             except Exception: pass
@@ -2510,6 +2696,8 @@ class AppShell(QWidget):
             body = (r.get("transcript") or "").strip()
         elif kind == "note":
             body = r.get("url") or ""
+        elif kind == "sys":
+            body = "\n".join(p for p in (r.get("text"), r.get("subject"), r.get("detail")) if p)
         else:
             body = r.get("app") or ""
         text = f"{self._detail_title.text()}  ·  {when}\n{body}".strip()

@@ -351,7 +351,7 @@ def _highlight_tokens(text, query):
 
 
 # ── Ref tag regex ──────────────────────────────────────────────────
-_REF_RE = _re.compile(r"\[(ss|au):(\d+)\]")
+_REF_RE = _re.compile(r"\[(ss|au|web):(\d+)\]")
 
 def _extract_refs(text):
     """Estrae lista [(kind, id)] da testo. Dedup mantenendo ordine."""
@@ -1477,6 +1477,56 @@ class EmbedAudioCard(_EmbedCardBase):
 
     def set_playing(self, playing):
         self._play_btn.setText("⏹" if playing else "▶")
+
+
+_C_WEB_HEX = "#a78bfa"
+_C_WEB_RGB = (167, 139, 250)
+
+
+class EmbedWebCard(_EmbedCardBase):
+    """Card pagina web citata: titolo + dominio + ts. Click → apre l'URL."""
+    clicked = pyqtSignal(str)  # url
+
+    def __init__(self, row_id, parent=None):
+        super().__init__(_C_WEB_RGB, parent)
+        self._id = row_id
+        conn = get_conn(); c = conn.cursor()
+        row = c.execute(
+            "SELECT ts, url, domain, title FROM web_pages WHERE id=?", (row_id,)
+        ).fetchone()
+        conn.close()
+        ts = row[0] if row else ""
+        self._url = (row[1] if row else "") or ""
+        domain = (row[2] if row else "") or "web"
+        title = (row[3] if row else "") or self._url or domain
+
+        h = QHBoxLayout(self); h.setContentsMargins(12, 8, 12, 8); h.setSpacing(12)
+        icon = QLabel("🌐"); icon.setFixedSize(40, 40)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setStyleSheet(
+            f"background:rgba(167,139,250,0.18); border:1px solid rgba(167,139,250,0.45);"
+            f" border-radius:20px; font-size:18px;")
+        h.addWidget(icon)
+
+        info_lay = QVBoxLayout(); info_lay.setContentsMargins(0, 4, 0, 4); info_lay.setSpacing(2)
+        head = QLabel(f"🌐  {domain}  ·  {_human_ago(ts)}")
+        head.setStyleSheet(f"color:{_C_WEB_HEX}; background:transparent; font-size:9px; font-weight:700; letter-spacing:1px;")
+        info_lay.addWidget(head)
+        title_short = title if len(title) <= 52 else title[:49] + "…"
+        tl = QLabel(title_short)
+        tl.setFont(QFont(UI_FONT, 10, QFont.Weight.DemiBold))
+        tl.setStyleSheet("color:#e6e6ec; background:transparent;")
+        tl.setWordWrap(False)
+        info_lay.addWidget(tl)
+        h.addLayout(info_lay, stretch=1)
+
+        hint = QLabel("↗")
+        hint.setStyleSheet(f"color:{_C_WEB_HEX}; background:transparent; font-size:14px;")
+        h.addWidget(hint)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._url:
+            self.clicked.emit(self._url)
 
 
 # ── Assistant turn bubble (contiene testo + embed cards inline) ───
