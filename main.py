@@ -255,6 +255,15 @@ def main():
         t_webingest.start(); threads.append(t_webingest)
     except Exception:
         logging.getLogger("deja").exception("avvio web_ingest fallito (proseguo)")
+    # Eventi di sistema (processi/file/install/...): tutto OFF di default,
+    # toggle per categoria in Impostazioni → Eventi. No ML, no admin; il loop
+    # è un no-op economico finché ogni categoria resta disattivata.
+    try:
+        from modules import system_events
+        t_sysev = threading.Thread(target=system_events.run, args=(stop_event,), daemon=True)
+        t_sysev.start(); threads.append(t_sysev)
+    except Exception:
+        logging.getLogger("deja").exception("avvio system_events fallito (proseguo)")
     # Indexer (embedding) e Audio (Whisper) richiedono torch/ML: avviali solo se
     # disponibile. I loro run() degradano comunque da soli, ma evitiamo retry
     # inutili quando sappiamo già che torch non c'è.

@@ -212,6 +212,20 @@ def init_db():
             vector      BLOB NOT NULL,
             FOREIGN KEY (web_id) REFERENCES web_pages(id)
         );
+        CREATE TABLE IF NOT EXISTS system_events (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts       TEXT NOT NULL,
+            source   TEXT NOT NULL DEFAULT 'system',  -- 'system' | 'browser'
+            category TEXT NOT NULL,   -- process|focus|file|install|clock|power|session|device|network|download|tab|visit
+            action   TEXT NOT NULL,   -- start|stop|created|deleted|moved|installed|uninstalled|updated|...
+            subject  TEXT,            -- entità principale: exe / path / programma / url / drive
+            app      TEXT,            -- app correlata (focus/process) se nota
+            detail   TEXT,            -- JSON ricco per-categoria (pid, exe, size, versione, durata, ...)
+            text     TEXT,            -- riassunto leggibile (timeline / ricerca / AI)
+            hidden   INTEGER DEFAULT 0  -- 1 = processo background/sistema/Deja (nascosto di default in timeline)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sysev_ts  ON system_events(ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_sysev_cat ON system_events(category, ts DESC);
         CREATE TABLE IF NOT EXISTS settings (
             key   TEXT PRIMARY KEY,
             value TEXT
@@ -263,6 +277,10 @@ def init_db():
     if "pinned" not in existing_au2:
         c.execute("ALTER TABLE audio_segments ADD COLUMN pinned INTEGER DEFAULT 0")
         print("[DB] Migrazione: audio_segments.pinned")
+    existing_sysev = {row[1] for row in c.execute("PRAGMA table_info(system_events)")}
+    if existing_sysev and "hidden" not in existing_sysev:
+        c.execute("ALTER TABLE system_events ADD COLUMN hidden INTEGER DEFAULT 0")
+        print("[DB] Migrazione: system_events.hidden")
     existing_audio = {row[1] for row in c.execute("PRAGMA table_info(audio_segments)")}
     if "audio_data" not in existing_audio:
         c.execute("ALTER TABLE audio_segments ADD COLUMN audio_data BLOB")
@@ -550,6 +568,25 @@ def load_search_history(limit=10):
     ).fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+def log_system_event(conn, source, category, action, subject="", app="", detail=None, text="", hidden=0):
+    """Inserisce un evento di sistema/browser. NON committa (il chiamante
+    raggruppa più eventi in un commit per ciclo). `detail` dict → JSON.
+    `hidden`=1 marca processi background/sistema/Deja: salvati comunque ma
+    nascosti di default nella timeline (visibili con 'mostra nascosti')."""
+    import json as _json
+    from datetime import datetime, timezone
+    try:
+        det = _json.dumps(detail, ensure_ascii=False) if isinstance(detail, dict) and detail else None
+    except Exception:
+        det = None
+    conn.execute(
+        "INSERT INTO system_events (ts, source, category, action, subject, app, detail, text, hidden) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (datetime.now(timezone.utc).isoformat(), source, category, action,
+         (subject or "")[:2048], (app or "")[:512], det, (text or "")[:1024],
+         1 if hidden else 0))
+
 
 def save_setting(key, value):
     conn = get_conn()

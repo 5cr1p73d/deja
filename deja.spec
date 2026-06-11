@@ -27,11 +27,19 @@ if os.path.isdir("tesseract"):
 hiddenimports = []
 hiddenimports += collect_submodules("torch")
 hiddenimports += collect_submodules("sentence_transformers")
+# Eventi di sistema: psutil (processi/dischi/rete) + watchdog (file). Importati
+# in modo LAZY dentro modules/system_events.run → PyInstaller non li vede da
+# solo: vanno dichiarati o nel build la feature eventi resta disattivata.
+hiddenimports += collect_submodules("psutil")
+hiddenimports += collect_submodules("watchdog")
 hiddenimports += [
     "encodings", "encodings.utf_8", "encodings.ascii", "encodings.latin_1",
     "encodings.cp1252", "encodings.idna", "codecs",
     "pyaudiowpatch", "sounddevice", "mss", "pytesseract", "pygetwindow",
     "keyboard", "numpy", "PIL", "ctypes", "ctypes.util",
+    # Eventi di sistema/browser
+    "psutil", "watchdog", "watchdog.observers", "watchdog.events",
+    "modules.system_events", "modules.web_ingest",
     # DB cifrato (SQLCipher) + segreti DPAPI
     "sqlcipher3", "sqlcipher3.dbapi2", "modules.secrets",
     # App lock: Windows Hello (winrt) + moduli lock

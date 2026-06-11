@@ -407,6 +407,22 @@ def get_all(limit: int = 3000, offset: int = 0) -> list[dict]:
             "app": "🌐 " + (row[3] or "web"),
         })
 
+    # Eventi di sistema/browser (tabella vuota finché l'utente non attiva le
+    # categorie in Impostazioni → Eventi: nessun costo nel caso comune).
+    for row in c.execute(
+        "SELECT id, ts, source, category, action, subject, app, detail, text, hidden "
+        "FROM system_events ORDER BY ts DESC LIMIT ?", (n,)
+    ):
+        results.append({
+            "id": row[0], "ts": row[1], "source": row[2] or "system",
+            "category": row[3] or "", "action": row[4] or "",
+            "subject": row[5] or "", "event_app": row[6] or "",
+            "detail": row[7] or "", "text": row[8] or "",
+            "hidden": row[9] or 0,
+            "type": "system", "score": 1.0, "exact": False,
+            "app": "⚙ " + (row[3] or "evento"),
+        })
+
     conn.close()
     results.sort(key=lambda x: x["ts"], reverse=True)
     return results[offset:offset + limit]

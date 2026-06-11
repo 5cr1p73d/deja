@@ -63,6 +63,63 @@ def _write_page(page: dict) -> None:
             pass
 
 
+_cfg_cache = {"mtime": 0.0, "data": {}}
+
+
+def _events_allowed(category: str) -> bool:
+    """L'app pubblica in events_cfg.json quali categorie evento è autorizzata a
+    spoolare (toggle ON, non in pausa). File assente/illeggibile → OFF: così
+    con la feature spenta NON finisce cronologia in chiaro sul disco."""
+    if not category:
+        return False
+    path = os.path.join(_data_dir(), "events_cfg.json")
+    try:
+        m = os.path.getmtime(path)
+        if m != _cfg_cache["mtime"]:
+            with open(path, "r", encoding="utf-8") as f:
+                _cfg_cache["data"] = json.load(f)
+            _cfg_cache["mtime"] = m
+        return bool(_cfg_cache["data"].get(category))
+    except Exception:
+        return False
+
+
+def _write_event(ev: dict) -> None:
+    """Scrive un evento browser (download/tab/visita) nello spool. Stesso
+    canale delle pagine; il discriminatore è `kind: "event"`. L'app filtra in
+    base ai toggle webev_* e inserisce in system_events (unico writer DB)."""
+    d = _inbox_dir()
+    rec = {
+        "v": 1, "kind": "event", "ts": time.time(),
+        "category": str(ev.get("category", ""))[:32],
+        "action": str(ev.get("action", ""))[:32],
+        "url": str(ev.get("url", ""))[:2048],
+        "final_url": str(ev.get("final_url", ""))[:2048],
+        "domain": str(ev.get("domain", ""))[:255],
+        "title": str(ev.get("title", ""))[:512],
+        "filename": str(ev.get("filename", ""))[:1024],
+        "mime": str(ev.get("mime", ""))[:255],
+    }
+    try:
+        rec["bytes"] = int(ev.get("bytes") or 0)
+    except Exception:
+        rec["bytes"] = 0
+    try:
+        rec["tab_id"] = int(ev.get("tab_id") or 0)
+    except Exception:
+        rec["tab_id"] = 0
+    fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+        os.replace(tmp, os.path.join(d, uuid.uuid4().hex + ".json"))
+    except Exception:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+
+
 def _write_state(tab: dict) -> None:
     state = {"v": 1, "ts": time.time(), "enabled": True, "tab": tab}
     d = _data_dir()
@@ -115,6 +172,11 @@ def main():
             })
         elif msg.get("type") == "page":
             _write_page(msg.get("page") or {})
+        elif msg.get("type") == "event":
+            ev = msg.get("event") or {}
+            # Gate: scrivi solo se l'app ha autorizzato quella categoria.
+            if _events_allowed(str(ev.get("category", ""))):
+                _write_event(ev)
 
 
 if __name__ == "__main__":
