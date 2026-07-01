@@ -6,6 +6,10 @@ AI assistant module for Déjà.
 - Endpoint OpenAI-compatible (Gonka, OpenRouter, ecc.)
 """
 import json
+import re
+import math
+import time as _time
+import concurrent.futures
 from datetime import datetime, timezone, timedelta
 
 from db import get_conn
@@ -38,6 +42,48 @@ def get_ai_config():
         "model":     (_get_setting("ai_model", AI_MODEL_DEFAULT) or AI_MODEL_DEFAULT).strip(),
         "inline":    _get_setting("ai_inline_rag", "0") == "1",
     }
+
+# ── Ricerca agentica (fan-out parallelo) ───────────────────────────
+# Quando attiva: la domanda viene scomposta in più query, le ricerche locali
+# girano, poi N chiamate LLM PARALLELE estraggono i fatti (ognuna col proprio
+# budget di token → si supera il limite per-call), e una sintesi finale unisce.
+AGENTIC_MAX_WORKERS      = 4    # chiamate LLM CONCORRENTI (parallelismo reale)
+AGENTIC_MAX_BATCHES      = 8    # max worker totali per turno (tetto costo)
+AGENTIC_MAX_SUBQUERIES   = 6    # angoli di ricerca dal planner (più = più coverage)
+AGENTIC_RESULTS_PER_QUERY = 15  # risultati per ogni sub-query
+AGENTIC_POOL_CAP         = 48   # tetto risultati totali considerati
+AGENTIC_WEB_CHARS        = 6000 # testo pagina web dato a un worker (per risultato)
+AGENTIC_OTHER_CHARS      = 1000 # screenshot/audio per risultato
+AGENTIC_CALL_OVERHEAD_TOK = 2500  # margine per system+domanda+formattazione
+AGENTIC_WORKER_OUT_TOK   = 2000   # output max di un worker (estrazione = concisa)
+
+# Limiti REALI per modello (dal pannello endpoint). context/output in token.
+# Match per sottostringa normalizzata (l'id può avere prefisso provider, es. "Qwen/").
+_MODEL_CAPS = {
+    "qwen3-235b-a22b-instruct-2507-fp8": {"context": 128000, "max_output": 8192},
+    "kimi-k2.6":    {"context": 128000, "max_output": 3072},
+    "minimax-m2.7": {"context": 128000, "max_output": 4096},
+}
+_DEFAULT_CAPS = {"context": 128000, "max_output": 4096}
+
+# Risposta pulita quando davvero non si trova nulla (mai mostrare il sentinel grezzo).
+_NOTHING_MSG = ("Non ho trovato nei tuoi ricordi qualcosa che corrisponde alla richiesta. "
+                "Se è più vecchio o lo ricordi diversamente, dammi qualche dettaglio in più "
+                "(quando è successo, con chi, l'argomento).")
+
+
+def _model_caps(model: str) -> dict:
+    norm = re.sub(r"[^a-z0-9]", "", (model or "").lower())
+    for key, caps in _MODEL_CAPS.items():
+        k = re.sub(r"[^a-z0-9]", "", key)
+        if k and (k in norm or norm in k):
+            return caps
+    return _DEFAULT_CAPS
+
+
+def agentic_enabled() -> bool:
+    return _get_setting("ai_agentic_search", "0") == "1"
+
 
 def is_local_endpoint(url: str) -> bool:
     """True se l'endpoint punta a un server locale (Ollama, LM Studio, llama.cpp…).
@@ -394,7 +440,75 @@ TOOLS = [
     },
 ]
 
-def _fmt_results(results, max_chars=500):
+# Prezzi/valute: usate per centrare lo snippet quando la domanda è "quanto costa".
+_PRICE_RE = re.compile(
+    r"(?:€|£|\$|usd|eur|gbp)\s?\d[\d.,]*|\b\d[\d.,]*\s?(?:€|£|\$|euro?|eur|usd|gbp|dollar[io]?)\b",
+    re.I,
+)
+# Parole che segnalano intento "prezzo" nella domanda → includi sempre i prezzi.
+_PRICE_INTENT = ("prezzo", "prezzi", "costa", "costo", "costato", "speso", "spesa",
+                 "pagato", "pagare", "totale", "quanto", "euro", "price", "cost", "paid")
+
+
+def _best_snippets(text, query, max_chars=700):
+    """Estrae le finestre di testo PIÙ RILEVANTI (attorno ai termini della query
+    e ai prezzi) invece di troncare dall'inizio. Così un dettaglio a metà pagina
+    — es. il prezzo di un prodotto — raggiunge davvero il modello, e si inviano
+    meno token inutili (header/menu)."""
+    text = (text or "").strip()
+    if not text or not query:
+        return text[:max_chars]
+    if len(text) <= max_chars:
+        return text
+    low = text.lower()
+    terms = [t for t in re.split(r"[^\w]+", query.lower()) if len(t) >= 3]
+
+    hits = []
+    for t in set(terms):
+        start = 0
+        while len(hits) < 60:
+            i = low.find(t, start)
+            if i < 0:
+                break
+            hits.append(i)
+            start = i + len(t)
+    # I prezzi sono quasi sempre il dato cercato: includili (specie se intento prezzo).
+    for m in _PRICE_RE.finditer(text):
+        hits.append(m.start())
+        if len(hits) > 120:
+            break
+    if not hits:
+        return text[:max_chars]
+
+    win = 280
+    hits.sort()
+    windows = []
+    for h in hits:
+        s = max(0, h - win // 3); e = min(len(text), h + win)
+        if windows and s <= windows[-1][1] + 50:
+            windows[-1][1] = max(windows[-1][1], e)
+        else:
+            windows.append([s, e])
+
+    # Se la domanda è sui prezzi, emetti per prime le finestre che contengono un
+    # prezzo: così, anche con budget stretto, l'importo non viene mai tagliato.
+    if any(w in query.lower() for w in _PRICE_INTENT):
+        windows.sort(key=lambda se: 0 if _PRICE_RE.search(text[se[0]:se[1]]) else 1)
+
+    parts, used = [], 0
+    for s, e in windows:
+        if used >= max_chars:
+            break
+        seg = text[s:e].strip()
+        if used + len(seg) > max_chars:
+            seg = seg[: max(0, max_chars - used)]
+        if seg:
+            parts.append(("…" if s > 0 else "") + seg + ("…" if e < len(text) else ""))
+            used += len(seg)
+    return " ".join(parts) if parts else text[:max_chars]
+
+
+def _fmt_results(results, query=None, max_chars=700, web_max_chars=1700):
     if not results:
         return "Nessun ricordo trovato."
     out = []
@@ -402,13 +516,13 @@ def _fmt_results(results, max_chars=500):
         ts = r["ts"][:19].replace("T", " ")
         t = r.get("type")
         if t == "screenshot":
-            body = (r.get("text") or "").strip()[:max_chars]
+            body = _best_snippets(r.get("text"), query, max_chars)
             ref = f"[ss:{r['id']}]"
             out.append(f"{ref} Screenshot @ {ts} | App: {r.get('app','?')}\n{body}")
         elif t == "web":
-            # Pagina web catturata dall'estensione: titolo + URL + TESTO della
-            # pagina. Prima finivano nel ramo audio → testo vuoto → ignorate.
-            body = (r.get("text") or "").strip()[:max_chars]
+            # Pagina web catturata dall'estensione: testo PIENO. Budget più alto
+            # + snippet centrati così il dettaglio (prezzo, dato) non viene tagliato.
+            body = _best_snippets(r.get("text"), query, web_max_chars)
             title = (r.get("title") or "").strip()
             url = (r.get("url") or "").strip()
             ref = f"[web:{r['id']}]"
@@ -417,7 +531,7 @@ def _fmt_results(results, max_chars=500):
                 head += f" | {url}"
             out.append(f"{head}\n{body}")
         else:
-            body = (r.get("transcript") or "").strip()[:max_chars]
+            body = _best_snippets(r.get("transcript"), query, max_chars)
             src = ("microfono (voce utente)" if r.get("source") == "mic"
                    else "audio di sistema (altoparlanti: altri o media)")
             ref = f"[au:{r['id']}]"
@@ -435,7 +549,22 @@ def _tool_search_memories(args):
         return f"Errore ricerca: {e}"
     if not results:
         return f"Nessun ricordo trovato per '{q}' in INTERO archivio."
-    return _fmt_results(results[:limit])
+
+    # query() ritorna screenshot + audio + web (web IN CODA). Un naive
+    # results[:limit] poteva buttar fuori le pagine web (testo PIENO, la fonte
+    # migliore per il contenuto letto online). Ordina GLOBALMENTE per
+    # rilevanza, poi garantisci la presenza di qualche pagina web se esiste.
+    def _rank(r):
+        return (not r.get("exact", False), -float(r.get("score", 0) or 0),
+                -search_module._ts_int(r.get("ts", "")))
+    results.sort(key=_rank)
+    top = results[:limit]
+    web_all = [r for r in results if r.get("type") == "web"]
+    if web_all and not any(r.get("type") == "web" for r in top):
+        # Riserva gli ultimi slot alle migliori pagine web rimaste fuori.
+        reserve = min(3, limit, len(web_all))
+        top = top[: max(1, limit - reserve)] + web_all[:reserve]
+    return _fmt_results(top, query=q)
 
 def _tool_list_recent(args):
     hours = max(1, _safe_int(args.get("hours"), 24))
@@ -693,7 +822,13 @@ SYSTEM_PROMPT = (
     "'riassumi la pagina su Y', 'di cosa parlavo' → search_memories. Le PAGINE WEB visitate "
     "sono salvate col TESTO COMPLETO (estensione browser): per il contenuto di ciò che l'utente "
     "leggeva online sono la fonte migliore, molto più dell'OCR. Non ignorarle: se tra i risultati "
-    "ci sono righe 'Pagina web [web:ID]', USALE e citale.\n\n"
+    "ci sono righe 'Pagina web [web:ID]', USALE e citale.\n"
+    "• 'quanto ho speso/pagato per X', 'che prezzo aveva X', 'quanto costa la cosa che ho visto' → "
+    "search_memories col NOME del prodotto (es. 'sedia ergonomica'). Prezzi, totali e dettagli "
+    "d'acquisto stanno nelle PAGINE WEB catturate (a volte negli screenshot del checkout): lo "
+    "snippet del tool è centrato sul prezzo — leggilo e riporta l'importo ESATTO col tag "
+    "[web:ID]/[ss:ID]. Se in una pagina ci sono più prezzi, scegli quello del prodotto giusto e "
+    "dillo; non sommare/indovinare.\n\n"
     "AUDIO — due sorgenti, significato diverso:\n"
     "• 'microfono (voce utente)' = sta parlando L'UTENTE (o chi gli sta accanto fisicamente).\n"
     "• 'audio di sistema (altoparlanti)' = ciò che usciva dalle casse: può essere un'ALTRA "
@@ -760,6 +895,474 @@ def _now_context() -> str:
     except Exception:
         return ""
 
+def _complete(client, model, messages, max_tokens, temperature=0.3):
+    """Chiamata non-streaming con retry su errori transitori. Ritorna testo."""
+    last = None
+    for attempt in range(3):
+        try:
+            r = client.chat.completions.create(
+                model=model, messages=messages,
+                max_tokens=max_tokens, temperature=temperature,
+            )
+            return (r.choices[0].message.content or "").strip()
+        except Exception as e:
+            last = str(e); s = last.lower()
+            retryable = any(x in s for x in ("429", "500", "502", "503", "504",
+                                             "timeout", "connection", "overloaded", "bad gateway"))
+            if not retryable:
+                break
+            _time.sleep(1.5 * (attempt + 1))
+    raise RuntimeError(last or "call failed")
+
+
+# "Niente trovato" robusto: i worker a volte rispondono in modo verboso invece
+# del sentinel esatto 'NIENTE' → senza questo finivano tra i "findings" e
+# avvelenavano la sintesi (che poi rispondeva 'NIENTE').
+_NOTHING_RE = re.compile(
+    r"\b(niente|nessun\w*|non ho trovato|non risult\w*|nulla di (?:pertinente|rilevante|utile)|"
+    r"non c'?è nulla|no relevant|nothing (?:relevant|found))\b", re.I)
+
+
+def _is_nothing(txt: str) -> bool:
+    t = (txt or "").strip()
+    if not t or t.upper() == "NIENTE":
+        return True
+    # Risposta breve che dice in sostanza "non ho trovato".
+    return len(t) <= 100 and bool(_NOTHING_RE.search(t))
+
+
+def _recent_history_text(history, n=6, max_chars=1400):
+    msgs = [m for m in (history or [])
+            if m.get("role") in ("user", "assistant") and m.get("content")][-n:]
+    lines = []
+    for m in msgs:
+        who = "Utente" if m["role"] == "user" else "Assistente"
+        lines.append(f"{who}: {str(m['content']).strip().replace(chr(10), ' ')[:300]}")
+    return "\n".join(lines)[-max_chars:]
+
+
+# Rilevatore deterministico di domande temporali/conversazione: NON ci si può
+# fidare solo del router LLM (a volte non mette recent_hours → la telefonata non
+# viene mai recuperata). Questi pattern forzano una finestra temporale.
+_CONV_RE = re.compile(
+    r"\b(telefonat\w*|chiamat\w*|conversazion\w*|call|riunion\w*|meeting|"
+    r"videochiamat\w*|parlat\w*|detto|sentit\w*|discuss\w*|intervist\w*)\b", re.I)
+_RECENT_RE = re.compile(
+    r"\b(di prima|poco fa|prima|poc'?anzi|appena|adesso|or ora|stamattina|stamani|"
+    r"oggi|earlier|just now|recenttemente|di recente)\b", re.I)
+_YESTERDAY_RE = re.compile(r"\bieri\b|\byesterday\b", re.I)
+
+
+def _infer_recent_hours(message: str) -> int:
+    m = (message or "").lower()
+    if _YESTERDAY_RE.search(m):
+        return 48
+    if _RECENT_RE.search(m) or _CONV_RE.search(m):
+        return 24
+    return 0
+
+
+def _route_and_plan(client, model, history, message):
+    """ROUTER: decide se serve cercare nei ricordi e, se sì, in quanti angoli.
+    Ritorna {"search": bool, "queries": [...]}. Risolve i follow-up col contesto.
+    Così gli agenti partono SOLO quando ha senso (no chiacchiera/saluti/scuse)."""
+    hist = _recent_history_text(history)
+    sys = (
+        "Sei il ROUTER di un assistente con memoria personale dell'utente "
+        "(screenshot OCR, audio, pagine web visitate). Decidi se per rispondere "
+        "all'ultimo messaggio SERVE cercare nei ricordi.\n"
+        "• search=false → chiacchiera, saluti, ringraziamenti, scuse ('ok scusa'), "
+        "meta-commenti, o domande di pura conoscenza generale/ragionamento che NON "
+        "riguardano ciò che l'utente ha visto/fatto/letto/sentito.\n"
+        "• search=true → riguarda attività, contenuti, prezzi, pagine, acquisti, cose "
+        "viste o sentite dall'utente (ANCHE i follow-up: usa il contesto per il tema).\n"
+        "Se search=true genera 2-6 query BREVI, DIVERSE tra loro, e RISOLVI i "
+        "riferimenti col contesto (es. 'altre alternative' → l'argomento dei messaggi "
+        "precedenti, tipo il prodotto o l'auto).\n"
+        "ESPANDI bene la ricerca, non limitarti alle parole della domanda:\n"
+        "  – includi SINONIMI e termini correlati;\n"
+        "  – soprattutto le FRASI/parole che la persona avrebbe REALMENTE detto o "
+        "scritto, non l'etichetta astratta. Es. per 'a che ora arriva il tecnico?' → "
+        "['tecnico', 'appuntamento', 'intervento', 'verso le', 'ti aspetto alle', "
+        "'passo alle', 'fascia oraria', 'tra le e le']. Pensa a COME comparirebbe nel "
+        "parlato o nel testo reale (orari, conferme, modi di dire), così trovi la "
+        "risposta anche quando il ricordo non nomina esplicitamente l'argomento.\n"
+        "Se search=false → queries vuoto.\n"
+        "• recent_hours → se la domanda riguarda qualcosa di RECENTE/temporale "
+        "('di prima', 'poco fa', 'appena', 'prima', 'stamattina', 'oggi' → 24; "
+        "'ieri' → 48; 'questa settimana' → 168), metti le ore da guardare indietro. "
+        "IMPORTANTE per cose come telefonate/conversazioni/video di cui il contenuto "
+        "NON contiene la keyword (es. 'la chiamata con Wind3' non dice 'wind3' nel "
+        "parlato): in quei casi imposta recent_hours per recuperare l'audio recente. "
+        "0 se non temporale.\n"
+        'Rispondi SOLO con JSON: {"search": true/false, "queries": ["..."], "recent_hours": 0}'
+    )
+    user = (f"Storico recente:\n{hist}\n\n" if hist else "") + f"Ultimo messaggio: {message}"
+    try:
+        raw = _complete(client, model,
+                        [{"role": "system", "content": sys},
+                         {"role": "user", "content": user}],
+                        max_tokens=240, temperature=0.2)
+        m = re.search(r"\{.*\}", raw, re.S)
+        data = json.loads(m.group(0) if m else raw)
+        search = bool(data.get("search", True))
+        qs = [str(q).strip() for q in (data.get("queries") or []) if str(q).strip()]
+        recent_hours = _safe_int(data.get("recent_hours"), 0)
+    except Exception:
+        search, qs, recent_hours = True, [message], 0  # in dubbio, cerca
+    if search and not qs:
+        qs = [message]
+    # Rete deterministica: se il router non ha colto la temporalità ma il
+    # messaggio parla di una telefonata/conversazione/'di prima', forziamo una
+    # finestra così l'audio recente entra nel pool.
+    if search:
+        recent_hours = max(recent_hours, _infer_recent_hours(message))
+    recent_hours = max(0, min(recent_hours, 24 * 14))  # tetto 2 settimane
+    out, seen = [], set()
+    for q in qs:
+        k = q.lower()
+        if k not in seen:
+            seen.add(k); out.append(q)
+    return {"search": search, "queries": out[:AGENTIC_MAX_SUBQUERIES], "recent_hours": recent_hours}
+
+
+def _converse_stream(client, model, history, message):
+    """Risposta conversazionale (niente agenti/ricerca) quando il router decide
+    che non serve cercare nei ricordi. Stesso protocollo di chat_stream."""
+    lang = i18n.ai_language_name()
+    sys = (
+        "Sei Déjà, assistente personale dell'utente. Rispondi in modo naturale, "
+        "amichevole e conciso. Questo messaggio NON richiede di cercare nei ricordi. "
+        "Non inventare fatti sull'utente; se servisse un dato dai ricordi che non hai, "
+        f"dillo e invita a riformulare. Rispondi in {lang}." + _now_context()
+    )
+    messages = ([{"role": "system", "content": sys}] + list(history)
+                + [{"role": "user", "content": message}])
+    messages = _trim_history(messages, AI_CONTEXT_TOKENS - AI_MAX_TOKENS - 2000)
+    try:
+        stream = client.chat.completions.create(
+            model=model, messages=messages, stream=True,
+            max_tokens=AI_MAX_TOKENS, temperature=0.5,
+        )
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            d = chunk.choices[0].delta
+            if d and getattr(d, "content", None):
+                yield ("text", d.content)
+    except Exception as e:
+        yield ("error", f"Errore: {e}")
+    yield ("done", None)
+
+
+def _is_deja_ui(r) -> bool:
+    """True se il ricordo è la UI di Déjà stessa (es. la finestra chat dove
+    l'utente ha DIGITATO la domanda). Va escluso dal pool: altrimenti la keyword
+    'wind3' matcha lo screenshot della chat e il modello risponde 'hai chiesto di
+    riassumere…' invece di trovare la telefonata vera."""
+    if r.get("type") != "screenshot":
+        return False
+    app = str(r.get("app") or "").lower()
+    return "déj" in app or "deja" in app
+
+
+def _recent_pool(hours, limit=30):
+    """Audio + screenshot delle ultime `hours` ore (newest first). Serve per le
+    domande temporali su contenuti SENZA keyword nel testo (es. 'la telefonata
+    con Wind3 di prima': il parlato non contiene 'wind3' → la keyword search
+    fallisce, ma l'audio recente sì)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, hours))).isoformat()
+    out = []
+    try:
+        conn = get_conn(); c = conn.cursor()
+        for row in c.execute(
+            "SELECT id, ts, source, transcript FROM audio_segments "
+            "WHERE ts>=? AND transcript IS NOT NULL AND transcript != '' "
+            "ORDER BY ts DESC LIMIT ?", (cutoff, limit)):
+            out.append({"type": "audio", "id": row[0], "ts": row[1], "source": row[2],
+                        "transcript": row[3], "text": row[3], "score": 0.55, "exact": False,
+                        "app": "🎙️ " + ("Microfono" if row[2] == "mic" else "Sistema")})
+        for row in c.execute(
+            "SELECT id, ts, app, text FROM screenshots WHERE ts>=? "
+            "ORDER BY ts DESC LIMIT ?", (cutoff, max(8, limit // 3))):
+            app = (row[2] or "")
+            if "déj" in app.lower() or "deja" in app.lower():
+                continue  # niente UI di Déjà
+            out.append({"type": "screenshot", "id": row[0], "ts": row[1],
+                        "app": app or "?", "text": row[3], "score": 0.4, "exact": False})
+        conn.close()
+    except Exception as e:
+        print(f"[AI/agentic] recent pool fail: {e}")
+    return out
+
+
+def _agentic_retrieve(queries, recent_hours=0):
+    """Esegue le ricerche locali (sequenziali, veloci), fonde e ordina, e
+    garantisce la presenza di pagine web. Se `recent_hours`, aggiunge l'audio/
+    schermate recenti (per le domande temporali). Ritorna lista risultati (cap)."""
+    seen, pooled = set(), []
+
+    def _add(items):
+        for r in items:
+            key = (r.get("type"), r.get("id"))
+            if key in seen:
+                continue
+            seen.add(key); pooled.append(r)
+
+    for q in queries:
+        try:
+            _add(search_module.query(q, top_k=AGENTIC_RESULTS_PER_QUERY))
+        except Exception as e:
+            print(f"[AI/agentic] search '{q}' fail: {e}")
+    if recent_hours:
+        _add(_recent_pool(recent_hours))
+
+    # Escludi la UI di Déjà (la chat dove l'utente ha scritto la domanda): è la
+    # fonte di falsi positivi tipo "hai chiesto di riassumere la telefonata".
+    pooled = [r for r in pooled if not _is_deja_ui(r)]
+
+    def _rank(r):
+        return (not r.get("exact", False), -float(r.get("score", 0) or 0),
+                -search_module._ts_int(r.get("ts", "")))
+    pooled.sort(key=_rank)
+    # Domanda temporale (telefonata/conversazione): l'audio è ciò che conta →
+    # mettilo davanti così non viene soffocato da pagine web/schermate rumorose.
+    if recent_hours:
+        pooled.sort(key=lambda r: (r.get("type") != "audio", _rank(r)))
+    top = pooled[:AGENTIC_POOL_CAP]
+
+    def _guarantee(kind, n):
+        nonlocal top
+        avail = [r for r in pooled if r.get("type") == kind]
+        if avail and not any(r.get("type") == kind for r in top):
+            res = min(n, len(avail))
+            top = top[: max(1, AGENTIC_POOL_CAP - res)] + avail[:res]
+
+    _guarantee("web", 3)
+    if recent_hours:
+        _guarantee("audio", 4)  # le domande temporali vivono nell'audio
+    return top
+
+
+def _batch_token_estimate(batch, query):
+    """Token approssimati che un lotto occuperà come INPUT del worker."""
+    body = _fmt_results(batch, query=query,
+                        max_chars=AGENTIC_OTHER_CHARS, web_max_chars=AGENTIC_WEB_CHARS)
+    return max(1, len(body) // 4)
+
+
+def _pack_batches(results, query, budget_tokens, want_batches):
+    """Impacchetta i risultati in lotti che NON superano `budget_tokens` (il
+    limite di contesto per chiamata), puntando a ~`want_batches` lotti per
+    sfruttare il parallelismo. Più lotti = più agenti = più contesto totale
+    del singolo limite per-call. Nessun risultato viene scartato."""
+    sized = []
+    for r in results:
+        b = _fmt_results([r], query=query,
+                         max_chars=AGENTIC_OTHER_CHARS, web_max_chars=AGENTIC_WEB_CHARS)
+        sized.append((r, max(1, len(b) // 4)))
+    total = sum(t for _, t in sized) or 1
+    # Numero lotti: abbastanza da stare sotto il budget, e almeno want_batches.
+    need = math.ceil(total / budget_tokens)
+    nb = max(1, min(AGENTIC_MAX_BATCHES, max(need, want_batches)))
+    soft = min(budget_tokens, max(1, math.ceil(total / nb)))
+    batches, cur, cur_tok = [], [], 0
+    for r, tk in sized:
+        if cur and cur_tok + tk > soft and len(batches) < nb - 1:
+            batches.append(cur); cur, cur_tok = [], 0
+        cur.append(r); cur_tok += tk
+    if cur:
+        batches.append(cur)
+    return batches
+
+
+def _batch_desc(batch):
+    """Riassunto leggibile di cosa sta analizzando un agente."""
+    cnt = {"web": 0, "screenshot": 0, "audio": 0}
+    for r in batch:
+        cnt[r.get("type", "screenshot")] = cnt.get(r.get("type", "screenshot"), 0) + 1
+    bits = []
+    if cnt.get("web"):        bits.append(f"{cnt['web']} pagine web")
+    if cnt.get("screenshot"): bits.append(f"{cnt['screenshot']} schermate")
+    if cnt.get("audio"):      bits.append(f"{cnt['audio']} audio")
+    samples = []
+    for r in batch[:3]:
+        if r.get("type") == "web":
+            samples.append((r.get("domain") or r.get("title") or "web")[:30])
+        elif r.get("type") == "screenshot":
+            samples.append(str(r.get("app") or "schermata")[:24])
+        else:
+            samples.append("audio")
+    head = f"{len(batch)} ricord{'o' if len(batch) == 1 else 'i'} (" + ", ".join(bits) + ")"
+    uniq = list(dict.fromkeys(s for s in samples if s))
+    return head + (f" · es. {', '.join(uniq)}" if uniq else "")
+
+
+def _agentic_worker(client, model, message, batch, max_out, temporal=False):
+    """Estrae i fatti rilevanti da un lotto di ricordi (1 chiamata LLM)."""
+    # Per le domande su conversazioni leggi l'audio in ordine CRONOLOGICO: aiuta
+    # a seguire il botta-e-risposta e a capire chi parla.
+    if temporal:
+        batch = sorted(batch, key=lambda r: r.get("ts", ""))
+    ctx = _fmt_results(batch, query=message,
+                       max_chars=AGENTIC_OTHER_CHARS, web_max_chars=AGENTIC_WEB_CHARS)
+    sys = (
+        "Estrai i fatti rilevanti alla domanda dai ricordi forniti. "
+        "Riporta numeri, prezzi, nomi, orari VERBATIM dal testo. Mantieni per "
+        "ogni fatto il suo tag [ss:ID]/[au:ID]/[web:ID]. "
+        "Considera anche gli indizi INDIRETTI: un orario, una conferma, un numero, "
+        "una frase che RISPONDE alla domanda anche se NON nomina esplicitamente "
+        "l'argomento (es. 'ti aspetto verso le 15' risponde a 'a che ora arriva il "
+        "tecnico'). Meglio riportare un indizio utile con la sua citazione che "
+        "scartarlo. "
+    )
+    if temporal:
+        sys += (
+            "La domanda riguarda una CONVERSAZIONE/telefonata/video RECENTE: gli "
+            "AUDIO recenti SONO quel contenuto. RIASSUMI ciò che viene detto. "
+            "ATTENZIONE ai ruoli: l'utente e l'interlocutore possono stare sullo "
+            "STESSO canale audio (es. telefonata fatta col telefono e captata dal "
+            "microfono del PC → entrambe le voci sono 'mic'). NON dare per scontato "
+            "che 'mic'=solo utente: DEDUCI dal CONTENUTO e dal botta-e-risposta chi "
+            "è l'utente e chi l'interlocutore (chi chiama, chi risponde, domande vs "
+            "risposte, ruoli tipo operatore/cliente). Riassumi attribuendo i turni "
+            "in base al senso, ANCHE se nomi o argomento esatto non compaiono. NON "
+            "scartare l'audio solo perché manca la keyword. "
+        )
+    sys += (
+        "Se DAVVERO nessun ricordo è pertinente, rispondi esattamente 'NIENTE'. "
+        "Non inventare nulla che non sia nei ricordi."
+    )
+    try:
+        return _complete(client, model,
+                         [{"role": "system", "content": sys},
+                          {"role": "user", "content": f"Domanda: {message}\n\nRicordi:\n{ctx}"}],
+                         max_tokens=max_out, temperature=0.2)
+    except Exception as e:
+        print(f"[AI/agentic] worker fail: {e}")
+        return ""
+
+
+def _agentic_chat_stream(client, model, history, message, queries, recent_hours=0):
+    """Pipeline agentica: ricerche → worker PARALLELI → sintesi stream.
+    `queries` arriva dal router. Dimensiona i lotti sui limiti REALI del modello
+    (context/output): ogni worker resta sotto il contesto per-call, ma N worker
+    insieme processano molto più di 128K e producono più del limite di output
+    singolo. Numero di agenti ∝ ampiezza della domanda (numero di angoli)."""
+    caps = _model_caps(model)
+    ctx_tok, out_tok = caps["context"], caps["max_output"]
+    worker_out = min(out_tok, AGENTIC_WORKER_OUT_TOK)
+    # Budget INPUT per worker = contesto modello − output worker − overhead prompt.
+    per_worker_in = max(8000, ctx_tok - worker_out - AGENTIC_CALL_OVERHEAD_TOK)
+
+    head = "🧠 Ricerca agentica · " + " · ".join(queries)
+    if recent_hours:
+        head += f" · + audio ultime {recent_hours}h"
+    yield ("tool", head)
+
+    pooled = _agentic_retrieve(queries, recent_hours)
+    # Agenti proporzionati all'ampiezza: domanda precisa (1 angolo) → pochi agenti.
+    want = max(1, min(AGENTIC_MAX_WORKERS, len(queries)))
+    batches = _pack_batches(pooled, message, per_worker_in, want) if pooled else []
+
+    findings = []
+    if batches:
+        # Quanti agenti e cosa fa ciascuno (visibile all'utente).
+        n = len(batches)
+        lbl = ("1 agente" if n == 1 else f"{n} agenti in parallelo")
+        ric = f"{len(pooled)} ricord{'o' if len(pooled) == 1 else 'i'}"
+        yield ("tool", f"👥 {lbl} · {ric} "
+                       f"(ctx {ctx_tok // 1000}K, output {out_tok} tok per agente)")
+        for i, b in enumerate(batches):
+            yield ("tool", f"  Agente {i + 1}/{len(batches)} → {_batch_desc(b)}")
+
+        temporal = bool(recent_hours)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=AGENTIC_MAX_WORKERS) as ex:
+            futs = {ex.submit(_agentic_worker, client, model, message, b, worker_out, temporal): i
+                    for i, b in enumerate(batches)}
+            done = 0
+            for fut in concurrent.futures.as_completed(futs):
+                i = futs[fut]; done += 1
+                txt = (fut.result() or "").strip()
+                ok = not _is_nothing(txt)
+                yield ("tool", f"  ✓ Agente {i + 1} ({done}/{len(batches)}) — "
+                               + ("ha trovato qualcosa" if ok else "niente di rilevante"))
+                if ok:
+                    findings.append(txt)
+    elif pooled:
+        yield ("tool", "1 agente · analizzo i ricordi")
+
+    # ── Sintesi finale (streaming) — usa il MAX OUTPUT del modello così le
+    # risposte lunghe non vengono troncate. ──
+    yield ("tool", "✍️ Sintesi finale…")
+    lang = i18n.ai_language_name()
+    synth_sys = (
+        "Sei Déjà, assistente personale. Hai già raccolto qui sotto degli ESTRATTI "
+        "dai ricordi dell'utente (ognuno con citazioni [ss:ID]/[au:ID]/[web:ID]).\n"
+        "REGOLA #0 — NON INVENTARE: usa SOLO i fatti presenti negli estratti. Non "
+        "aggiungere prezzi, nomi, numeri o dettagli che non siano scritti lì. "
+        "Mantieni i tag di citazione esatti dopo ogni fatto.\n"
+        "Se gli estratti NON contengono la risposta, scrivi una frase naturale che lo "
+        "spiega (es. 'Non ho trovato nulla nei tuoi ricordi su …') — NON rispondere mai "
+        "con la sola parola 'NIENTE' o con un sentinel.\n"
+        "Rispondi conciso, diretto, senza mostrare il ragionamento. "
+        f"Rispondi sempre in {lang}." + _now_context()
+    )
+    if recent_hours:
+        synth_sys += (
+            "\nLa domanda riguarda una CONVERSAZIONE/telefonata RECENTE: se gli estratti "
+            "contengono il dialogo audio, RIASSUMILO. L'utente e l'interlocutore possono "
+            "stare sullo STESSO canale (telefonata fatta col telefono e captata dal "
+            "microfono): NON dedurre i ruoli dal solo canale mic/sistema, deducili dal "
+            "CONTENUTO (botta-e-risposta, chi chiede e chi risponde). NON dire che 'manca "
+            "il contenuto' o che 'risulta solo la richiesta': il dialogo audio recente È "
+            "la telefonata richiesta."
+        )
+    findings_blob = ("\n\n".join(f"— Estratto {i+1} —\n{f}" for i, f in enumerate(findings))
+                     if findings else "NESSUN estratto rilevante trovato.")
+    messages = ([{"role": "system", "content": synth_sys}]
+                + list(history)
+                + [{"role": "user",
+                    "content": f"Domanda: {message}\n\nEstratti dai ricordi:\n{findings_blob}"}])
+    # Lascia spazio all'output pieno del modello.
+    messages = _trim_history(messages, max(8000, ctx_tok - out_tok - 4000))
+
+    # Guard anti-sentinel: bufferizza la testa della risposta; se è un "niente"
+    # secco (es. il modello sputa 'NIENTE'), NON mostrarlo → frase naturale.
+    try:
+        stream = client.chat.completions.create(
+            model=model, messages=messages, stream=True,
+            max_tokens=out_tok, temperature=0.4,
+        )
+        parts, emitted = [], False
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if not (delta and getattr(delta, "content", None)):
+                continue
+            parts.append(delta.content)
+            if emitted:
+                yield ("text", delta.content)
+                continue
+            joined = "".join(parts)
+            if len(joined) < 28:
+                continue            # ancora poco: aspetta per decidere
+            if _is_nothing(joined):
+                continue            # sembra un "niente": continua a bufferare
+            yield ("text", joined); emitted = True
+        full = "".join(parts).strip()
+        if not emitted:
+            # Mai emesso: o è corto, o è un "niente" → output pulito.
+            if full and not _is_nothing(full):
+                yield ("text", full)
+            else:
+                yield ("text", _NOTHING_MSG)
+    except Exception as e:
+        yield ("error", f"Sintesi fallita: {e}")
+    yield ("done", None)
+
+
 def chat_stream(history, message):
     """
     Generator yields tuples:
@@ -777,6 +1380,34 @@ def chat_stream(history, message):
         yield ("error", str(e))
         yield ("done", None)
         return
+
+    # Ricerca agentica (opt-in): prima un ROUTER decide se vale la pena cercare
+    # (no chiacchiera/saluti) e in quanti angoli (→ quanti agenti). Se non serve
+    # cercare, risponde conversazionalmente senza agenti. Se la pipeline fallisce
+    # a metà senza testo, degrada al loop a tool sequenziale.
+    if agentic_enabled():
+        plan = _route_and_plan(client, model, history, message)
+        if not plan["search"]:
+            yield from _converse_stream(client, model, history, message)
+            return
+        produced = False
+        try:
+            for ev in _agentic_chat_stream(client, model, history, message,
+                                           plan["queries"], plan.get("recent_hours", 0)):
+                if ev[0] in ("text", "error"):
+                    produced = True
+                if ev[0] == "done":
+                    if produced:
+                        yield ("done", None)
+                        return
+                    break  # niente prodotto → prova il percorso normale
+                yield ev
+        except Exception as e:
+            print(f"[AI] agentic fallita, fallback sequenziale: {e}")
+        if produced:
+            yield ("done", None)
+            return
+        yield ("tool", "passo alla ricerca standard…")
 
     system_loc = (SYSTEM_PROMPT + _now_context()
                   + f"\n\nIMPORTANTE: rispondi sempre in {i18n.ai_language_name()}.")
@@ -904,7 +1535,7 @@ def rag_inline(query, results):
         return f"⚠ {e}"
     if not results:
         return "Nessun ricordo per questa query."
-    ctx = _fmt_results(results[:AI_RAG_TOP_K], max_chars=400)
+    ctx = _fmt_results(results[:AI_RAG_TOP_K], query=query, max_chars=600, web_max_chars=1400)
     try:
         resp = client.chat.completions.create(
             model=model,

@@ -428,6 +428,72 @@ def get_all(limit: int = 3000, offset: int = 0) -> list[dict]:
     return results[offset:offset + limit]
 
 
+def list_audio(day_iso=None, hour_from=0, hour_to=23, limit=5000, offset=0):
+    """Segmenti audio dal più recente. Se `day_iso` ('YYYY-MM-DD') è dato, filtra
+    al giorno + fascia oraria LOCALE [hour_from, hour_to] (i ts sono UTC → la
+    finestra locale viene convertita in UTC). Ritorna list[dict] type='audio'."""
+    from datetime import datetime as _dt, timezone as _tz
+    conn = get_conn(); c = conn.cursor()
+    try:
+        if day_iso:
+            try:
+                y, mo, d = (int(x) for x in str(day_iso).split("-"))
+                hf = max(0, min(23, int(hour_from)))
+                ht = max(hf, min(23, int(hour_to)))
+                loc = _dt.now().astimezone().tzinfo
+                start = _dt(y, mo, d, hf, 0, 0, tzinfo=loc).astimezone(_tz.utc).isoformat()
+                end = _dt(y, mo, d, ht, 59, 59, tzinfo=loc).astimezone(_tz.utc).isoformat()
+            except Exception:
+                return []
+            rows = c.execute(
+                "SELECT id, ts, source, transcript FROM audio_segments "
+                "WHERE ts>=? AND ts<=? ORDER BY ts DESC LIMIT ? OFFSET ?",
+                (start, end, limit, offset)).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT id, ts, source, transcript FROM audio_segments "
+                "ORDER BY ts DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for r in rows:
+        out.append({
+            "id": r[0], "ts": r[1], "source": r[2], "transcript": r[3],
+            "text": r[3], "type": "audio", "score": 1.0, "exact": False,
+            "app": "\U0001f399️ " + ("Microfono" if r[2] == "mic" else "Sistema"),
+        })
+    return out
+
+
+def list_audio_around(ts_iso, minutes=15, limit=20, exclude_id=None):
+    """Audio entro ±`minutes` dal ts dato (stesso formato ISO UTC dei ts salvati),
+    escluso `exclude_id`. Ordinati per ts ASC (dal più vecchio al più recente).
+    Serve alla navigazione 'audio vicini' nel detail. Ritorna list[dict]."""
+    from datetime import datetime as _dt, timedelta as _td
+    try:
+        base = _dt.fromisoformat(ts_iso)
+    except Exception:
+        return []
+    lo = (base - _td(minutes=minutes)).isoformat()
+    hi = (base + _td(minutes=minutes)).isoformat()
+    conn = get_conn(); c = conn.cursor()
+    try:
+        q = ("SELECT id, ts, source, transcript FROM audio_segments "
+             "WHERE ts>=? AND ts<=?")
+        params = [lo, hi]
+        if exclude_id is not None:
+            q += " AND id<>?"; params.append(exclude_id)
+        q += " ORDER BY ts ASC LIMIT ?"; params.append(limit)
+        rows = c.execute(q, params).fetchall()
+    finally:
+        conn.close()
+    return [{
+        "id": r[0], "ts": r[1], "source": r[2], "transcript": r[3],
+        "text": r[3], "type": "audio", "score": 1.0, "exact": False,
+        "app": "\U0001f399️ " + ("Microfono" if r[2] == "mic" else "Sistema"),
+    } for r in rows]
+
+
 def get_audio_blob(audio_id):
     """Recupera (audio_data, audio_format) di un singolo segmento audio.
     Usato per il caricamento on-demand alla selezione (Esplora/ricerca)."""

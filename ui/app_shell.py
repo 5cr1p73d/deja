@@ -16,11 +16,11 @@ from datetime import datetime, timezone
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QLineEdit,
     QListWidget, QListWidgetItem, QStyledItemDelegate, QStyle, QFrame,
-    QSlider, QScrollArea, QStackedWidget, QComboBox, QSpinBox,
+    QSlider, QScrollArea, QStackedWidget, QComboBox, QSpinBox, QDateEdit, QCheckBox,
 )
 from PyQt6.QtCore import (
     Qt, QSize, QRectF, QPointF, QPoint, QRect, QThread, pyqtSignal, QTimer,
-    QPropertyAnimation, QEasingCurve, pyqtProperty,
+    QPropertyAnimation, QEasingCurve, pyqtProperty, QDate,
 )
 from PyQt6.QtGui import (
     QFont, QColor, QPainter, QPainterPath, QPen, QBrush, QLinearGradient,
@@ -787,7 +787,8 @@ class AppShell(QWidget):
     def _build_timeline_page(self):
         main = QWidget(); ml = QVBoxLayout(main); ml.setContentsMargins(0, 0, 0, 0); ml.setSpacing(0)
         top = QWidget(); top.setObjectName("hbar"); top.setFixedHeight(58); top.setStyleSheet(f"QWidget#hbar{{border-bottom:1px solid {theme.LINE};}}")
-        tl = QHBoxLayout(top); tl.setContentsMargins(20, 0, 20, 0); tl.setSpacing(12)
+        # Riserva a destra per i controlli finestra (overlay) → il segmento/toggle non ci finisce sotto.
+        tl = QHBoxLayout(top); tl.setContentsMargins(20, 0, 134, 0); tl.setSpacing(12)
         self._tl_search = QLineEdit(); self._tl_search.setPlaceholderText("Cerca nei tuoi ricordi…")
         self._tl_search.setStyleSheet(
             f"QLineEdit{{background:rgba(255,255,255,0.035); border:1px solid {theme.LINE};"
@@ -877,7 +878,11 @@ class AppShell(QWidget):
         self._detail_body.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         self._detail_body.setOpenExternalLinks(True)
         self._detail_body.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self._detail_body.setStyleSheet(f"color:{theme.INK_SOFT}; font-size:13px; line-height:1.6;")
+        # Cap larghezza = pannello fisso (366) − margini − scrollbar: senza, con un
+        # transcript lungo il sizeHint del QLabel wordwrap diventa più largo del
+        # pannello → niente scrollbar orizzontale → testo tagliato a destra.
+        self._detail_body.setMaximumWidth(316)
+        self._detail_body.setStyleSheet(f"color:{theme.INK_SOFT}; font-size:13px;")
         bv.addWidget(self._detail_body)
 
         bv.addWidget(self._build_audio_bar())
@@ -906,6 +911,27 @@ class AppShell(QWidget):
         cv.addWidget(ctxlbl); cv.addWidget(self._ctx_chips)
         bv.addWidget(self._ctx_wrap)
 
+        # ── Audio vicini (± N minuti) — solo per i ricordi audio ──
+        self._nearby_wrap = QWidget()
+        nv = QVBoxLayout(self._nearby_wrap); nv.setContentsMargins(0, 8, 0, 0); nv.setSpacing(7)
+        nhead = QHBoxLayout(); nhead.setContentsMargins(0, 0, 0, 0); nhead.setSpacing(8)
+        nlbl = QLabel("AUDIO VICINI"); nlbl.setFont(cf); nlbl.setStyleSheet(f"color:{theme.INK_FAINT};")
+        self._nearby_min = QSpinBox(); self._nearby_min.setRange(1, 180); self._nearby_min.setValue(15)
+        self._nearby_min.setPrefix("± "); self._nearby_min.setSuffix(" min"); self._nearby_min.setFixedHeight(26)
+        self._nearby_min.setStyleSheet(
+            f"QSpinBox{{background:rgba(255,255,255,0.05); color:{theme.INK}; border:1px solid {theme.LINE};"
+            f" border-radius:7px; padding:1px 6px; font-size:11px;}}"
+            f"QSpinBox::up-button,QSpinBox::down-button{{width:12px;}}")
+        self._nearby_min.valueChanged.connect(lambda *_: self._refill_nearby())
+        nhead.addWidget(nlbl); nhead.addStretch(); nhead.addWidget(self._nearby_min)
+        nv.addLayout(nhead)
+        self._nearby_list = QWidget()
+        self._nearby_list_l = QVBoxLayout(self._nearby_list)
+        self._nearby_list_l.setContentsMargins(0, 0, 0, 0); self._nearby_list_l.setSpacing(4)
+        nv.addWidget(self._nearby_list)
+        self._nearby_wrap.setVisible(False)
+        bv.addWidget(self._nearby_wrap)
+
         bv.addStretch()
         self._body_scroll = QScrollArea(); self._body_scroll.setWidgetResizable(True)
         self._body_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -924,6 +950,11 @@ class AppShell(QWidget):
         self._audio_bar.setStyleSheet(
             f"background:rgba(255,255,255,0.03); border:1px solid {theme.LINE}; border-radius:12px;")
         al = QVBoxLayout(self._audio_bar); al.setContentsMargins(14, 12, 14, 12); al.setSpacing(8)
+        # Data/ora assoluta del segmento (l'utente vuole sapere QUANDO è stato registrato).
+        self._audio_when = QLabel("")
+        self._audio_when.setFont(QFont(theme.MONO, 8))
+        self._audio_when.setStyleSheet(f"color:{theme.INK_DIM}; background:transparent;")
+        al.addWidget(self._audio_when)
         self.waveform = WaveformWidget()
         al.addWidget(self.waveform)
         self.audio_slider = QSlider(Qt.Orientation.Horizontal)
@@ -1065,9 +1096,59 @@ class AppShell(QWidget):
     # ── Pagina Galleria ─────────────────────────────────────────────
     def _build_gallery_page(self):
         page = QWidget(); pl = QVBoxLayout(page); pl.setContentsMargins(0, 0, 0, 0); pl.setSpacing(0)
-        head = QLabel("Galleria"); head.setFont(QFont(theme.SANS, 13, QFont.Weight.DemiBold))
-        head.setStyleSheet(f"color:{theme.INK}; padding:18px 18px 8px;")
-        pl.addWidget(head)
+
+        # ── Barra superiore: titolo + segmento Schermate/Audio ──
+        top = QWidget(); top.setObjectName("hbar"); top.setFixedHeight(58)
+        top.setStyleSheet(f"QWidget#hbar{{border-bottom:1px solid {theme.LINE};}}")
+        # Margine destro ampio: lascia spazio ai controlli finestra (overlay top-right)
+        # così il segmento Schermate/Audio non finisce sotto i pulsanti min/max/close.
+        tl = QHBoxLayout(top); tl.setContentsMargins(20, 0, 134, 0); tl.setSpacing(12)
+        head = QLabel("Galleria"); head.setFont(QFont(theme.SANS, 14, QFont.Weight.DemiBold))
+        head.setStyleSheet(f"color:{theme.INK};")
+        tl.addWidget(head); tl.addStretch()
+        seg = _SegBar(); self._gal_seg = {}; self._gal_seg_keys = []
+        for key, label, dot in (("screens", "Schermate", theme.EMERALD_RGB),
+                                ("audio", "Audio", theme.AMBER_RGB)):
+            b = SegButton(label, dot=dot, on=(key == "screens"))
+            b.clicked.connect(lambda _=False, k=key: self._gallery_set_mode(k))
+            self._gal_seg[key] = b; self._gal_seg_keys.append(key); seg.add_button(b)
+        self._gal_seg_bar = seg
+        tl.addWidget(seg)
+        pl.addWidget(top)
+
+        # ── Filtro data/ora (solo modalità Audio) ──
+        self._gal_filter_bar = QWidget()
+        self._gal_filter_bar.setStyleSheet(
+            f"QLabel{{color:{theme.INK_DIM}; font-size:12px; background:transparent;}}"
+            f"QDateEdit,QSpinBox{{background:rgba(255,255,255,0.05); color:{theme.INK};"
+            f" border:1px solid {theme.LINE}; border-radius:8px; padding:4px 8px; font-size:12px;}}"
+            f"QDateEdit::drop-down{{width:16px;}}"
+            f"QSpinBox::up-button,QSpinBox::down-button{{width:14px;}}"
+            f"QCheckBox{{color:{theme.INK_SOFT}; font-size:12px; spacing:6px;}}")
+        fb = QHBoxLayout(self._gal_filter_bar); fb.setContentsMargins(20, 10, 20, 10); fb.setSpacing(9)
+        self._gal_allaudio = QCheckBox("Tutti"); self._gal_allaudio.setChecked(True)
+        self._gal_allaudio.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._gal_allaudio.stateChanged.connect(lambda *_: self._reload_audio_gallery())
+        self._gal_date = QDateEdit(); self._gal_date.setCalendarPopup(True)
+        self._gal_date.setDisplayFormat("dd/MM/yyyy"); self._gal_date.setDate(QDate.currentDate())
+        self._gal_date.dateChanged.connect(lambda *_: self._reload_audio_gallery())
+        self._gal_h_from = QSpinBox(); self._gal_h_from.setRange(0, 23); self._gal_h_from.setValue(0); self._gal_h_from.setSuffix(":00")
+        self._gal_h_to = QSpinBox(); self._gal_h_to.setRange(0, 23); self._gal_h_to.setValue(23); self._gal_h_to.setSuffix(":59")
+        for w in (self._gal_h_from, self._gal_h_to):
+            w.valueChanged.connect(lambda *_: self._reload_audio_gallery())
+        fb.addWidget(self._gal_allaudio)
+        sep = QLabel("·"); sep.setStyleSheet(f"color:{theme.INK_FAINT};"); fb.addWidget(sep)
+        fb.addWidget(QLabel("Giorno")); fb.addWidget(self._gal_date)
+        fb.addWidget(QLabel("dalle")); fb.addWidget(self._gal_h_from)
+        fb.addWidget(QLabel("alle")); fb.addWidget(self._gal_h_to)
+        fb.addStretch()
+        self._gal_count = QLabel(""); self._gal_count.setStyleSheet(f"color:{theme.INK_FAINT}; font-size:11px;")
+        fb.addWidget(self._gal_count)
+        self._gal_filter_bar.setVisible(False)
+        pl.addWidget(self._gal_filter_bar)
+
+        # ── Stack: griglia schermate / lista audio ──
+        self._gal_stack = QStackedWidget()
         self.gallery = QListWidget()
         self.gallery.setViewMode(QListWidget.ViewMode.IconMode)
         self.gallery.setResizeMode(QListWidget.ResizeMode.Adjust)
@@ -1084,8 +1165,79 @@ class AppShell(QWidget):
         self.gallery.verticalScrollBar().valueChanged.connect(lambda _: self._ensure_gallery_thumbs())
         self.gallery.itemDoubleClicked.connect(
             lambda it: self._on_embed_ss_click(it.data(TL_ID)) if it.data(TL_ID) is not None else None)
-        pl.addWidget(self.gallery, stretch=1)
+        self._gal_stack.addWidget(self.gallery)
+
+        # Lista audio (stesso look della timeline, così il click apre il player nel detail)
+        self.audio_list = QListWidget()
+        self.audio_list.setStyleSheet(theme.results_list() + " QListWidget{padding:4px 12px;}")
+        self.audio_list.setItemDelegate(TimelineDelegate(self.audio_list))
+        self.audio_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.audio_list.currentRowChanged.connect(
+            self._make_pick_handler(lambda: self.audio_list, "_audio_records"))
+        self._gal_stack.addWidget(self.audio_list)
+
+        pl.addWidget(self._gal_stack, stretch=1)
+        self._gallery_mode = "screens"
+        self._audio_records = []
         return page
+
+    def _gallery_enter(self):
+        """Chiamato entrando in Galleria: applica la modalità corrente (schermate
+        di default) e carica i dati se serve."""
+        self._gallery_set_mode(getattr(self, "_gallery_mode", "screens"))
+
+    def _gallery_set_mode(self, mode):
+        self._gallery_mode = mode
+        audio = (mode == "audio")
+        if mode in self._gal_seg_keys:
+            self._gal_seg_bar.set_active(self._gal_seg_keys.index(mode), animate=True)
+        self._gal_stack.setCurrentIndex(1 if audio else 0)
+        self._gal_filter_bar.setVisible(audio)
+        # Il detail (player) serve solo per l'audio; per le schermate resta nascosto.
+        self.detail.setVisible(audio)
+        if audio:
+            if not getattr(self, "_audio_gal_loaded", False):
+                self._reload_audio_gallery()
+        else:
+            if not self._gallery_loaded:
+                self._load_gallery()
+
+    def _reload_audio_gallery(self):
+        from modules import search as search_module
+        allaudio = self._gal_allaudio.isChecked()
+        for w in (self._gal_date, self._gal_h_from, self._gal_h_to):
+            w.setEnabled(not allaudio)
+        if allaudio:
+            day = None; hf, ht = 0, 23
+        else:
+            qd = self._gal_date.date()
+            day = f"{qd.year():04d}-{qd.month():02d}-{qd.day():02d}"
+            hf = self._gal_h_from.value(); ht = max(self._gal_h_from.value(), self._gal_h_to.value())
+        try:
+            recs = search_module.list_audio(day_iso=day, hour_from=hf, hour_to=ht, limit=5000)
+        except Exception as e:
+            recs = []; print(f"[Gallery] list_audio fail: {e}")
+        self._audio_records = recs
+        self._audio_gal_loaded = True
+        self.audio_list.blockSignals(True)
+        self.audio_list.clear()
+        for idx, r in enumerate(recs):
+            title, sub = self._row_text(r, "audio")
+            it = QListWidgetItem()
+            it.setData(TL_TITLE, title); it.setData(TL_SUB, sub)
+            it.setData(TL_TIME, self._clock(r.get("ts", "")))
+            it.setData(TL_KIND, "audio"); it.setData(TL_HUE, HUE.get("audio", theme.VIOLET_RGB))
+            it.setData(TL_ID, r.get("id")); it.setData(TL_IDX, idx)
+            self.audio_list.addItem(it)
+        self.audio_list.blockSignals(False)
+        self._gal_count.setText(f"{len(recs)} audio" + ("  (max 5000)" if len(recs) >= 5000 else ""))
+        if recs:
+            self.audio_list.setCurrentRow(0)
+        else:
+            self._show_detail_sections(shot=False, body=True, audio=False)
+            self._detail_title.setText("Nessun audio")
+            self._detail_body.setTextFormat(Qt.TextFormat.PlainText)
+            self._detail_body.setText("Nessuna registrazione per il filtro selezionato.")
 
     def _load_gallery(self):
         """Riempie la galleria con i soli screenshot (icone lazy)."""
@@ -1175,8 +1327,8 @@ class AppShell(QWidget):
         self.detail.setVisible(key in ("timeline", "search"))
         if key == "search":
             self.search_input.setFocus()
-        elif key == "gallery" and not self._gallery_loaded:
-            self._load_gallery()
+        elif key == "gallery":
+            self._gallery_enter()
         elif key == "assistant":
             if not self._chat_loaded:
                 self._load_chat_from_db(); self._chat_loaded = True
@@ -1357,21 +1509,133 @@ class AppShell(QWidget):
         lay.addWidget(self._set_row("Durata segmento audio (s)", "Lunghezza di ogni spezzone audio registrato.", self._s_audio_chunk))
 
         lay.addWidget(self._set_section("Dispositivi audio"))
+        intro = QLabel("Scegli una sorgente <b>Principale</b> e una di <b>Riserva</b>. "
+                       "Déjà usa la Principale; se la scolleghi passa da solo alla "
+                       "Riserva (es. cuffie → casse).")
+        intro.setWordWrap(True); intro.setTextFormat(Qt.TextFormat.RichText)
+        intro.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11.5px; background:transparent;")
+        lay.addWidget(intro)
+
         try:
             from ui.settings import _get_all_devices
             _devs = _get_all_devices()
         except Exception:
             _devs = []
-        mics = [(idx, name) for tp, idx, name in _devs if tp == "mic"]
-        loops = [(idx, name) for tp, idx, name in _devs if tp == "loopback"]
-        self._s_mic = self._set_combo([("Non registrare", None)] + [(n, str(i)) for i, n in mics],
-                                      current=get_setting("audio_mic_index", None), width=220)
-        lay.addWidget(self._set_row("Microfono", "Sorgente per la voce.", self._s_mic))
-        self._s_out = self._set_combo([("Non registrare", None)] + [(n, str(i)) for i, n in loops],
-                                      current=get_setting("audio_out_index", None), width=220)
-        lay.addWidget(self._set_row("Audio di sistema", "Cattura ciò che esce dalle casse (loopback).", self._s_out))
+        # I device sono salvati per NOME (stabile tra riavvii), in ordine di
+        # priorità: principale → riserva. A runtime si usa il primo collegato.
+        mics  = [name for tp, idx, name in _devs if tp == "mic"]
+        loops = [name for tp, idx, name in _devs if tp == "loopback"]
+
+        import json as _json
+        def _prio(key):
+            raw = get_setting(key, None)
+            if raw:
+                try:
+                    v = _json.loads(raw)
+                    if isinstance(v, list):
+                        return [str(x) for x in v if x]
+                except Exception:
+                    pass
+            return []
+
+        def _legacy_name(legacy_key, pool):
+            li = get_setting(legacy_key, None)
+            if li is None:
+                return None
+            try:
+                li = int(li)
+            except (ValueError, TypeError):
+                return None
+            for tp, idx, name in _devs:
+                if idx == li and name in pool:
+                    return name
+            return None
+
+        mic_prio = _prio("audio_mic_priority")
+        out_prio = _prio("audio_out_priority")
+        # Migrazione display: vecchio indice singolo → nome (poi riscritto al salvataggio).
+        if not mic_prio:
+            lm = _legacy_name("audio_mic_index", mics)
+            if lm:
+                mic_prio = [lm]
+        if not out_prio:
+            lo = _legacy_name("audio_out_index", loops)
+            if lo:
+                out_prio = [lo]
+
+        # Combo vuote: popolamento (e refresh) in _populate_audio_combos.
+        self._s_mic  = self._set_combo([], width=240)
+        self._s_mic2 = self._set_combo([], width=240)
+        self._s_out  = self._set_combo([], width=240)
+        self._s_out2 = self._set_combo([], width=240)
+
+        # Gruppo Microfono — header dedicato così è chiaro cosa controlla.
+        lay.addWidget(self._set_section("🎙  Microfono — la tua voce"))
+        lay.addWidget(self._set_row("1 · Principale", "Microfono che usi di solito (es. cuffie).", self._s_mic))
+        lay.addWidget(self._set_row("2 · Riserva", "Solo se la Principale non è collegata. Opzionale.", self._s_mic2))
+
+        # Gruppo Audio di sistema (loopback)
+        lay.addWidget(self._set_section("🔊  Audio di sistema — ciò che esce dal PC"))
+        lay.addWidget(self._set_row("1 · Principale", "Uscita audio preferita (es. cuffie).", self._s_out))
+        lay.addWidget(self._set_row("2 · Riserva", "Solo se la Principale non è collegata (es. casse). Opzionale.", self._s_out2))
+
+        self._populate_audio_combos(_devs, mic_prio, out_prio)
+
+        # Rileva dispositivi: ri-enumera live (cuffie collegate dopo l'avvio).
+        refresh = QPushButton("↻  Rileva dispositivi")
+        refresh.setCursor(Qt.CursorShape.PointingHandCursor); refresh.setFixedHeight(30)
+        refresh.setStyleSheet(
+            f"QPushButton{{background:transparent; color:{theme.INK_SOFT}; border:1px solid {theme.LINE};"
+            f" border-radius:8px; padding:0 14px; font-family:'{theme.SANS}'; font-size:12px;}}"
+            "QPushButton:hover{background:rgba(255,255,255,0.04);}")
+        refresh.clicked.connect(self._refresh_audio_devices)
+        rrow = QHBoxLayout(); rrow.setContentsMargins(2, 6, 2, 0)
+        rrow.addWidget(refresh); rrow.addStretch()
+        lay.addLayout(rrow)
+
+        note = QLabel("Hai collegato le cuffie ora? Premi <b>Rileva dispositivi</b> per vederle in elenco. "
+                      "Durante la registrazione il passaggio cuffie ⇄ casse è automatico.")
+        note.setWordWrap(True); note.setTextFormat(Qt.TextFormat.RichText)
+        note.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11px; background:transparent;")
+        lay.addWidget(note)
         lay.addStretch()
         return w
+
+    def _populate_audio_combos(self, devs, mic_sel=None, out_sel=None):
+        """(Ri)popola le 4 combo audio dai device enumerati. Se mic_sel/out_sel
+        sono None → preserva la selezione corrente (refresh); altrimenti applica
+        le liste priorità passate (primo build)."""
+        mics  = [name for tp, idx, name in devs if tp == "mic"]
+        loops = [name for tp, idx, name in devs if tp == "loopback"]
+        mic_items = [("Non registrare", None)] + [(n, n) for n in mics]
+        out_items = [("Non registrare", None)] + [(n, n) for n in loops]
+
+        def _fill(cb, items, sel):
+            prev = cb.currentData() if sel is None else sel
+            cb.blockSignals(True); cb.clear()
+            for label, data in items:
+                cb.addItem(label, data)
+            ix = cb.findData(prev) if prev is not None else -1
+            cb.setCurrentIndex(ix if ix >= 0 else 0)
+            cb.blockSignals(False)
+
+        def _at(lst, i):
+            return lst[i] if (lst is not None and i < len(lst)) else None
+
+        _fill(self._s_mic,  mic_items, _at(mic_sel, 0))
+        _fill(self._s_mic2, mic_items, _at(mic_sel, 1))
+        _fill(self._s_out,  out_items, _at(out_sel, 0))
+        _fill(self._s_out2, out_items, _at(out_sel, 1))
+
+    def _refresh_audio_devices(self):
+        """Ri-enumera i device (bypassa la cache) e ripopola le combo,
+        preservando le scelte già fatte. Per device collegati dopo l'avvio."""
+        try:
+            from ui.settings import _get_all_devices
+            devs = _get_all_devices(force=True)
+        except Exception:
+            devs = []
+        self._populate_audio_combos(devs)
 
     def _build_set_events(self, get_setting):
         """Eventi di sistema + eventi browser. TUTTO OFF di default: ogni
@@ -1481,6 +1745,8 @@ class AppShell(QWidget):
         lay.addWidget(self._set_row("Modello chat", "Nome del modello sull'endpoint (o premi Rileva).", mctl))
         self._s_ai_inline = ToggleSwitch((get_setting("ai_inline_rag", "1") or "1") == "1")
         lay.addWidget(self._set_row("Cita i ricordi (RAG)", "L'assistente allega schermate/audio pertinenti alle risposte.", self._s_ai_inline))
+        self._s_ai_agentic = ToggleSwitch((get_setting("ai_agentic_search", "0") or "0") == "1")
+        lay.addWidget(self._set_row("Ricerca agentica", "Più ricerche in parallelo: più veloce e supera i limiti di token per risposta. Usa più chiamate (costo maggiore).", self._s_ai_agentic))
         self._s_ai_status = QLabel(""); self._s_ai_status.setWordWrap(True)
         self._s_ai_status.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11px; background:transparent;")
         lay.addWidget(self._accent_btn("Prova connessione", self._ai_test), alignment=Qt.AlignmentFlag.AlignLeft)
@@ -1916,13 +2182,25 @@ class AppShell(QWidget):
                 except (ValueError, TypeError):
                     continue
                 save_setting(key, val); setattr(_cfg, attr, val)
+            import json as _json
+            def _collect(*combos):
+                seq = []
+                for cb in combos:
+                    v = cb.currentData()
+                    if v and v not in seq:
+                        seq.append(v)
+                return seq
+            mic_seq = _collect(self._s_mic, self._s_mic2)
+            out_seq = _collect(self._s_out, self._s_out2)
             conn = get_conn(); c = conn.cursor()
-            for key, combo in (("audio_mic_index", self._s_mic), ("audio_out_index", self._s_out)):
-                data = combo.currentData()
-                if data is not None:
-                    c.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", (key, str(data)))
+            for key, seq, legacy in (("audio_mic_priority", mic_seq, "audio_mic_index"),
+                                     ("audio_out_priority", out_seq, "audio_out_index")):
+                if seq:
+                    c.execute("INSERT OR REPLACE INTO settings VALUES (?,?)", (key, _json.dumps(seq)))
                 else:
                     c.execute("DELETE FROM settings WHERE key=?", (key,))
+                # Rimuovi il vecchio indice instabile: ora si usa il nome.
+                c.execute("DELETE FROM settings WHERE key=?", (legacy,))
             conn.commit(); conn.close()
             try:
                 from modules.audio import request_restart; request_restart()
@@ -1970,6 +2248,7 @@ class AppShell(QWidget):
             save_setting("ai_base_url", self._s_ai_url.text().strip())
             save_setting("ai_model", self._s_ai_model.currentText().strip())
             save_setting("ai_inline_rag", "1" if self._s_ai_inline.isChecked() else "0")
+            save_setting("ai_agentic_search", "1" if self._s_ai_agentic.isChecked() else "0")
         except Exception as e:
             errs += 1; print(f"[Set] ai: {e}")
 
@@ -2206,7 +2485,9 @@ class AppShell(QWidget):
         if kind == "ss":
             card = EmbedScreenshotCard(rid); card.clicked.connect(self._on_embed_ss_click); return card
         if kind == "au":
-            card = EmbedAudioCard(rid); card.play_requested.connect(self._on_embed_audio_play); return card
+            card = EmbedAudioCard(rid)
+            card.play_requested.connect(lambda a, c=card: self._on_embed_audio_play(a, c))
+            return card
         if kind == "web":
             card = EmbedWebCard(rid); card.clicked.connect(self._on_embed_web_click); return card
         return None
@@ -2231,7 +2512,7 @@ class AppShell(QWidget):
         ts = (row[1] or "")[:19].replace("T", " ")
         FullscreenViewer(px, f"{row[2] or '?'}   •   {ts}", self).exec()
 
-    def _on_embed_audio_play(self, aid):
+    def _on_embed_audio_play(self, aid, card=None):
         import sounddevice as sd
         if self._chat_audio_playing is not None:
             prev_card, prev_aid = self._chat_audio_playing
@@ -2241,7 +2522,7 @@ class AppShell(QWidget):
             except Exception: pass
             self._chat_audio_playing = None
             if prev_aid == aid:
-                return
+                return  # toggle: stesso audio → ferma e basta
         try:
             from db import get_conn
             conn = get_conn()
@@ -2254,6 +2535,12 @@ class AppShell(QWidget):
         try:
             data = decode_audio(row[0], row[1] or "f32")
             sd.play(data, samplerate=16000)
+            # Traccia lo stato: serve a fermare/toggle e a non far interrompere
+            # la riproduzione dal refresh della timeline.
+            if card is not None:
+                try: card.set_playing(True)
+                except Exception: pass
+                self._chat_audio_playing = (card, aid)
         except Exception as e:
             print(f"[Chat] embed audio play fail: {e}")
 
@@ -2273,6 +2560,11 @@ class AppShell(QWidget):
         if not self.isVisible():
             return
         if getattr(self, "_current_page", "timeline") != "timeline":
+            return
+        # Riproduzione audio in corso: il reload ricostruisce la lista e cambia
+        # selezione → _populate_detail fermerebbe l'audio a metà. Rimanda il
+        # refresh (i dati nuovi verranno caricati al tick dopo la fine).
+        if getattr(self, "_is_playing", False) or getattr(self, "_chat_audio_playing", None):
             return
         w = getattr(self, "_worker", None)
         if w is not None and w.isRunning():
@@ -2313,6 +2605,11 @@ class AppShell(QWidget):
         )
         n_shot = sum(1 for r in self._records if r.get("type") == "screenshot")
         self._archive_lbl.setText(f"{n_shot:,} schermate".replace(",", "."))
+        # Audio in riproduzione: NON rubare la selezione (cambiarla ripopola il
+        # detail → _stop_audio → audio interrotto). Lascia tutto com'è.
+        if getattr(self, "_is_playing", False) or getattr(self, "_chat_audio_playing", None):
+            QTimer.singleShot(0, lambda: self._ensure_visible_thumbs(self.timeline))
+            return
         # seleziona il primo evento (salta gli header) e carica le sue thumb
         for i in range(self.timeline.count()):
             it = self.timeline.item(i)
@@ -2466,6 +2763,8 @@ class AppShell(QWidget):
         self._reset_audio_player()
 
         self._cur_record = r; self._cur_kind = kind; self._cur_sid = sid
+        # 'Audio vicini' è pertinente solo ai ricordi audio: nascondi di default.
+        self._nearby_wrap.setVisible(False)
 
         # fade morbido del contenuto detail a ogni selezione
         self._fade_in(self._body_scroll)
@@ -2502,7 +2801,9 @@ class AppShell(QWidget):
             transcript = (r.get("transcript") or "").strip()
             self._detail_body.setTextFormat(Qt.TextFormat.PlainText)
             self._detail_body.setText(transcript or "(nessuna trascrizione)")
+            self._audio_when.setText("🕐  " + self._detail_when_full(r.get("ts", "")))
             self._load_audio(sid, r)
+            self._fill_nearby_audio(r)
         elif kind == "note":
             self._show_detail_sections(shot=False, body=True, audio=False)
             import html as _html
@@ -2857,6 +3158,64 @@ class AppShell(QWidget):
             return ts.astimezone().strftime("%d/%m/%Y %H:%M")
         except Exception:
             return ""
+
+    @staticmethod
+    def _detail_when_full(ts_iso):
+        """Data + ora complete (con giorno della settimana e secondi) per il detail audio."""
+        try:
+            ts = datetime.fromisoformat(ts_iso)
+            if ts.tzinfo is None: ts = ts.replace(tzinfo=timezone.utc)
+            local = ts.astimezone()
+            g = ["lun", "mar", "mer", "gio", "ven", "sab", "dom"][local.weekday()]
+            return f"{g} {local.strftime('%d/%m/%Y · %H:%M:%S')}"
+        except Exception:
+            return ""
+
+    # ── Audio vicini (navigazione ± N minuti) ───────────────────────
+    def _refill_nearby(self):
+        r = getattr(self, "_cur_record", None)
+        if r and getattr(self, "_cur_kind", "") == "audio":
+            self._fill_nearby_audio(r)
+
+    def _fill_nearby_audio(self, r):
+        # svuota la lista corrente
+        while self._nearby_list_l.count():
+            w = self._nearby_list_l.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        from modules import search as search_module
+        ts = r.get("ts", "")
+        try:
+            near = search_module.list_audio_around(
+                ts, minutes=self._nearby_min.value(), limit=14, exclude_id=r.get("id"))
+        except Exception as e:
+            near = []; print(f"[Detail] audio vicini fail: {e}")
+        self._nearby_wrap.setVisible(True)
+        if not near:
+            empty = QLabel("Nessun altro audio in questa finestra.")
+            empty.setStyleSheet(f"color:{theme.INK_FAINT}; font-size:11px; background:transparent;")
+            self._nearby_list_l.addWidget(empty)
+            return
+        for nr in near:
+            nts = nr.get("ts", "")
+            after = nts >= ts            # ts UTC ISO stesso formato → confronto lessicale ok
+            arrow = "↓" if after else "↑"
+            snip = (nr.get("transcript") or "").replace("\n", " ").strip()
+            snip = (snip[:38] + "…") if len(snip) > 38 else (snip or "—")
+            src = "🎙️" if nr.get("source") == "mic" else "🔊"
+            btn = QPushButton(f"{arrow} {self._clock(nts)}  {src}  {snip}")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                f"QPushButton{{text-align:left; background:rgba(255,255,255,0.03); color:{theme.INK_SOFT};"
+                f" border:1px solid {theme.LINE}; border-radius:8px; padding:6px 10px; font-size:11px;"
+                f" font-family:'{theme.SANS}';}}"
+                "QPushButton:hover{background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.35);}")
+            btn.clicked.connect(lambda _=False, rec=nr: self._open_nearby_audio(rec))
+            self._nearby_list_l.addWidget(btn)
+
+    def _open_nearby_audio(self, rec):
+        title, _sub = self._row_text(rec, "audio")
+        self._populate_detail(rec, "audio", title, rec.get("id"))
 
     # ── Compat tray/hotkey ──────────────────────────────────────────
     def toggle(self):

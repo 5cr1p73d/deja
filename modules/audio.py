@@ -1,5 +1,5 @@
 # modules/audio.py
-import time, queue, threading, logging
+import time, queue, threading, logging, json
 import numpy as np
 import pyaudiowpatch as pyaudio
 from datetime import datetime, timezone
@@ -37,6 +37,72 @@ def list_devices():
             devices.append({"index":dev["index"],"name":dev["name"],"loopback":True})
     except: pass
     pa.terminate(); return devices
+
+# ── Risoluzione device per NOME (stabile tra reboot) + priorità ────────────
+# Gli indici PyAudio/WASAPI NON sono stabili tra riavvii/collegamenti: salvare
+# l'indice rompe la cattura dopo un reboot. Salviamo invece una lista di NOMI
+# in ordine di priorità (es. cuffie → casse) e risolviamo a runtime il primo
+# device collegato.
+
+def _device_maps(pa):
+    """name→index per mic e loopback, usando un'istanza PyAudio GIÀ aperta.
+    (Una seconda istanza può abortire PortAudio se un loopback è attivo.)"""
+    mics, loops = {}, {}
+    for i in range(pa.get_device_count()):
+        try:
+            d = pa.get_device_info_by_index(i)
+        except Exception:
+            continue
+        if d["maxInputChannels"] > 0 and not d.get("isLoopbackDevice", False):
+            mics.setdefault(d["name"], d["index"])
+    try:
+        for d in pa.get_loopback_device_info_generator():
+            loops.setdefault(d["name"], d["index"])
+    except Exception:
+        pass
+    return mics, loops
+
+def _priority_names(key, legacy_key, name_map):
+    """Lista nomi in ordine di priorità. Fallback: vecchio indice → nome."""
+    raw = get_setting(key)
+    if raw:
+        try:
+            names = json.loads(raw)
+            if isinstance(names, list):
+                return [str(n) for n in names if n]
+        except Exception:
+            pass
+    legacy = get_setting(legacy_key)
+    if legacy:
+        try:
+            idx = int(legacy)
+            for name, i in name_map.items():
+                if i == idx:
+                    return [name]
+        except Exception:
+            pass
+    return []
+
+def _resolve(priority, name_map):
+    """Primo device della lista priorità attualmente collegato → (name, index)."""
+    for name in priority:
+        if name in name_map:
+            return name, name_map[name]
+    return None, None
+
+# Device attualmente in uso (per rilevare i cambi e fare hot-swap).
+_active_devices = {"mic": None, "pc": None}
+
+def _preferred_changed(pa):
+    """True se la priorità ora risolve a un device diverso da quello attivo
+    (es. cuffie collegate/scollegate). Innesca un hot-swap senza restart app."""
+    try:
+        mics, loops = _device_maps(pa)
+    except Exception:
+        return False
+    mic_name, _ = _resolve(_priority_names("audio_mic_priority", "audio_mic_index", mics), mics)
+    out_name, _ = _resolve(_priority_names("audio_out_priority", "audio_out_index", loops), loops)
+    return mic_name != _active_devices.get("mic") or out_name != _active_devices.get("pc")
 
 _log = logging.getLogger("deja.audio")
 
@@ -194,14 +260,11 @@ def record_and_transcribe(stop_event, max_seconds=60, device_index=None):
         if device_index is not None:
             dev = pa.get_device_info_by_index(device_index)
         else:
-            from db import get_conn
-            conn = get_conn()
-            row = conn.cursor().execute(
-                "SELECT value FROM settings WHERE key='audio_mic_index'"
-            ).fetchone()
-            conn.close()
-            if row and row[0]:
-                try: dev = pa.get_device_info_by_index(int(row[0]))
+            # Stessa priorità della cattura continua: primo mic collegato.
+            mics, _ = _device_maps(pa)
+            _n, idx = _resolve(_priority_names("audio_mic_priority", "audio_mic_index", mics), mics)
+            if idx is not None:
+                try: dev = pa.get_device_info_by_index(idx)
                 except Exception: dev = None
             if dev is None:
                 dev = pa.get_default_input_device_info()
@@ -320,6 +383,7 @@ def _transcribe_voice(audio):
 # Heartbeat: ultimo timestamp callback per ogni source. Watchdog ricrea stream se dead.
 _audio_heartbeat = {"mic": 0.0, "pc": 0.0}
 WATCHDOG_DEAD_AFTER = 300  # 5 min senza callback → restart
+DEVCHECK_INTERVAL = 6      # ogni 6s ricontrolla se il device prioritario è cambiato
 
 # Hot-swap event: settings UI lo set per forzare reload device senza restart app
 _restart_event = threading.Event()
@@ -329,13 +393,17 @@ def request_restart():
     _restart_event.set()
 
 def _setup_streams(pa, stop_event, chunk_secs):
-    """Crea streams pc + mic. Ritorna (streams, proc_threads)."""
-    mic_idx_str = get_setting("audio_mic_index")
-    out_idx_str = get_setting("audio_out_index")
+    """Crea streams pc + mic risolvendo i device per NOME (priorità). Ritorna
+    (streams, proc_threads). Aggiorna _active_devices con i nomi scelti."""
+    mics, loops = _device_maps(pa)
+    mic_name, mic_idx = _resolve(_priority_names("audio_mic_priority", "audio_mic_index", mics), mics)
+    out_name, out_idx = _resolve(_priority_names("audio_out_priority", "audio_out_index", loops), loops)
+    _active_devices["mic"] = mic_name
+    _active_devices["pc"]  = out_name
     streams = []; proc_threads = []
 
-    if out_idx_str is not None:
-        idx = int(out_idx_str)
+    if out_idx is not None:
+        idx = out_idx
         try:
             lb_dev = next((d for d in pa.get_loopback_device_info_generator() if d["index"]==idx), None)
             if lb_dev:
@@ -357,8 +425,8 @@ def _setup_streams(pa, stop_event, chunk_secs):
                 proc_threads.append(threading.Thread(target=_process_loop,args=(q_pc,"pc",stop_event),daemon=True))
         except Exception as e: print(f"[Audio] Errore loopback: {e}")
 
-    if mic_idx_str is not None:
-        idx = int(mic_idx_str)
+    if mic_idx is not None:
+        idx = mic_idx
         try:
             dev=pa.get_device_info_by_index(idx); rate=int(dev["defaultSampleRate"])
             buf=[]; q_mic=queue.Queue(); tf=int(rate*chunk_secs)
@@ -393,7 +461,8 @@ def _audio_enabled() -> bool:
     return (get_setting("capture_audio_enabled") or "1") == "1"
 
 def _has_audio_devices() -> bool:
-    return bool(get_setting("audio_mic_index") or get_setting("audio_out_index"))
+    return bool(get_setting("audio_mic_priority") or get_setting("audio_out_priority")
+                or get_setting("audio_mic_index") or get_setting("audio_out_index"))
 
 def run(stop_event):
     """Loop audio resiliente a: device assenti, toggle on/off da impostazioni,
@@ -405,6 +474,7 @@ def run(stop_event):
     streams, proc_threads = [], []
     model_loaded = False
     last_watchdog_check = time.time()
+    last_devcheck = time.time()
     print("[Audio] Avviato.")
 
     def _open():
@@ -472,6 +542,14 @@ def run(stop_event):
                 continue
 
             now = time.time()
+            # Auto-switch: la priorità ora risolve a un device diverso (cuffie
+            # collegate/scollegate) → hot-swap degli stream, niente restart app.
+            if not force_restart and pa is not None and (now - last_devcheck) >= DEVCHECK_INTERVAL:
+                last_devcheck = now
+                if _preferred_changed(pa):
+                    print("[Audio] Device prioritario cambiato: hot-swap…")
+                    force_restart = True
+
             dead_sources = []
             if not force_restart:
                 if now - last_watchdog_check < 30: continue
