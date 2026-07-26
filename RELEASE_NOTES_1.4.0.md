@@ -45,9 +45,11 @@ Collecting all that is kept off the UI thread and split into a fast tick and a s
 - **Multi-line input** that grows as you type — Enter sends, Shift+Enter adds a line — and stays editable while the assistant replies.
 - **Suggestions on the empty chat**, one per source, so it's clear what you can actually ask.
 
-## 🐧 Linux (experimental)
+## 🐧 Linux support (source only, untested)
 
-First Linux build (X11): XDG data directories with 0700 permissions, secrets in the system keyring (SecretService/KWallet), idle detection via XScreenSaver, screen-lock detection over D-Bus, active window through xdotool, PulseAudio/PipeWire monitor sources for system audio, global hotkeys via pynput, and XDG autostart. Build with `build_linux.sh`. Windows behaviour is unchanged.
+Groundwork for running Déjà on Linux/X11 has landed: XDG data directories with 0700 permissions, secrets in the system keyring (SecretService/KWallet), idle detection via XScreenSaver, screen-lock detection over D-Bus, active window through xdotool, PulseAudio/PipeWire monitor sources for system audio, global hotkeys via pynput, XDG autostart, and platform markers in `requirements.txt`.
+
+**No Linux binary ships with this release** and none of this has been exercised on a real Linux machine yet — every branch is guarded by a platform check, so Windows behaviour is unchanged. If you want to try it, build from source with `build_linux.sh` and expect rough edges. Wayland, system events and app lock are not covered yet.
 
 ## 🔒 Security
 
