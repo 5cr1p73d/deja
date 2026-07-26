@@ -17,6 +17,16 @@ EMBED_DIM = 768
 
 _vec_available = None
 
+# FTS5: indice full-text (external content) per la ricerca testuale veloce.
+# _fts_available = il build SQLite/SQLCipher supporta FTS5 e le tabelle esistono.
+# _fts_ready     = il backfill one-shot è completato (flag settings 'fts_built_v1'):
+#                  prima di allora la ricerca usa il fallback LIKE (indice parziale
+#                  darebbe risultati mancanti sui dati vecchi).
+_fts_available = None
+_fts_ready = False
+_fts_thread = None   # thread backfill in corso (per stop pulito a chiusura)
+_fts_stop = None     # threading.Event: chiede al backfill di fermarsi
+
 # Chiave DB (64 hex = 32 byte) protetta con DPAPI. None ⇒ DB resta in chiaro
 # (DPAPI/SQLCipher non disponibili). Caricata pigramente una sola volta.
 _db_key_hex = None
@@ -70,6 +80,197 @@ def _try_load_vec(conn):
 
 def vec_available():
     return _vec_available is True
+
+
+def fts_available():
+    return _fts_available is True
+
+
+def fts_ready():
+    """True quando l'indice FTS è utilizzabile per le query (build supportato
+    E backfill completato)."""
+    return _fts_available is True and _fts_ready
+
+
+# Tabelle FTS5 external-content: nessuna duplicazione del testo (l'indice legge
+# dalla tabella sorgente), trigger per tenere l'indice allineato a INSERT/
+# UPDATE/DELETE. Tokenizer unicode61 senza accenti + indici prefix 2-3 char:
+# la query per token usa "tok"* (match a inizio parola), ordini di grandezza
+# più veloce del LIKE '%tok%' che scandiva l'intera tabella a ogni ricerca.
+_FTS_SCHEMA = """
+    CREATE VIRTUAL TABLE IF NOT EXISTS screenshots_fts USING fts5(
+        text, content='screenshots', content_rowid='id',
+        tokenize="unicode61 remove_diacritics 2", prefix='2 3');
+    CREATE TRIGGER IF NOT EXISTS ss_fts_ai AFTER INSERT ON screenshots BEGIN
+        INSERT INTO screenshots_fts(rowid, text) VALUES (new.id, new.text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS ss_fts_ad AFTER DELETE ON screenshots BEGIN
+        INSERT INTO screenshots_fts(screenshots_fts, rowid, text) VALUES('delete', old.id, old.text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS ss_fts_au AFTER UPDATE OF text ON screenshots BEGIN
+        INSERT INTO screenshots_fts(screenshots_fts, rowid, text) VALUES('delete', old.id, old.text);
+        INSERT INTO screenshots_fts(rowid, text) VALUES (new.id, new.text);
+    END;
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS audio_fts USING fts5(
+        transcript, content='audio_segments', content_rowid='id',
+        tokenize="unicode61 remove_diacritics 2", prefix='2 3');
+    CREATE TRIGGER IF NOT EXISTS au_fts_ai AFTER INSERT ON audio_segments BEGIN
+        INSERT INTO audio_fts(rowid, transcript) VALUES (new.id, new.transcript);
+    END;
+    CREATE TRIGGER IF NOT EXISTS au_fts_ad AFTER DELETE ON audio_segments BEGIN
+        INSERT INTO audio_fts(audio_fts, rowid, transcript) VALUES('delete', old.id, old.transcript);
+    END;
+    CREATE TRIGGER IF NOT EXISTS au_fts_au AFTER UPDATE OF transcript ON audio_segments BEGIN
+        INSERT INTO audio_fts(audio_fts, rowid, transcript) VALUES('delete', old.id, old.transcript);
+        INSERT INTO audio_fts(rowid, transcript) VALUES (new.id, new.transcript);
+    END;
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS web_fts USING fts5(
+        text, title, url, content='web_pages', content_rowid='id',
+        tokenize="unicode61 remove_diacritics 2", prefix='2 3');
+    CREATE TRIGGER IF NOT EXISTS web_fts_ai AFTER INSERT ON web_pages BEGIN
+        INSERT INTO web_fts(rowid, text, title, url) VALUES (new.id, new.text, new.title, new.url);
+    END;
+    CREATE TRIGGER IF NOT EXISTS web_fts_ad AFTER DELETE ON web_pages BEGIN
+        INSERT INTO web_fts(web_fts, rowid, text, title, url) VALUES('delete', old.id, old.text, old.title, old.url);
+    END;
+    CREATE TRIGGER IF NOT EXISTS web_fts_au AFTER UPDATE OF text, title, url ON web_pages BEGIN
+        INSERT INTO web_fts(web_fts, rowid, text, title, url) VALUES('delete', old.id, old.text, old.title, old.url);
+        INSERT INTO web_fts(rowid, text, title, url) VALUES (new.id, new.text, new.title, new.url);
+    END;
+"""
+
+# Cleanup se il setup FTS fallisce a metà: trigger orfani (che puntano a una
+# tabella FTS mancante) farebbero FALLIRE gli INSERT del capturer = perdita
+# dati. Meglio nessun indice che trigger rotti.
+_FTS_DROP = """
+    DROP TRIGGER IF EXISTS ss_fts_ai;  DROP TRIGGER IF EXISTS ss_fts_ad;  DROP TRIGGER IF EXISTS ss_fts_au;
+    DROP TRIGGER IF EXISTS au_fts_ai;  DROP TRIGGER IF EXISTS au_fts_ad;  DROP TRIGGER IF EXISTS au_fts_au;
+    DROP TRIGGER IF EXISTS web_fts_ai; DROP TRIGGER IF EXISTS web_fts_ad; DROP TRIGGER IF EXISTS web_fts_au;
+    DROP TABLE IF EXISTS screenshots_fts;
+    DROP TABLE IF EXISTS audio_fts;
+    DROP TABLE IF EXISTS web_fts;
+"""
+
+
+def _setup_fts(conn):
+    """Crea tabelle FTS + trigger. Setta _fts_available. Mai eccezioni fuori."""
+    global _fts_available
+    c = conn.cursor()
+    try:
+        c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS __fts_probe USING fts5(x)")
+        c.execute("DROP TABLE IF EXISTS __fts_probe")
+    except Exception as e:
+        _fts_available = False
+        print(f"[DB] FTS5 non supportato dal build: fallback LIKE. ({e})")
+        return
+    try:
+        c.executescript(_FTS_SCHEMA)
+        conn.commit()
+        _fts_available = True
+        print("[DB] FTS5 tabelle+trigger OK.")
+    except Exception as e:
+        print(f"[DB] setup FTS fallito, rollback completo: {e}")
+        try:
+            c.executescript(_FTS_DROP)
+            conn.commit()
+        except Exception as e2:
+            print(f"[DB] cleanup FTS fallito: {e2}")
+        _fts_available = False
+
+
+def _fts_backfill_async():
+    """Backfill dell'indice FTS dai dati esistenti, in background e a BATCH
+    (2000 righe per commit). NON usa il comando 'rebuild': su un DB grande
+    terrebbe il write-lock per minuti e il capturer perderebbe cicli
+    (busy_timeout). Tra un batch e l'altro il lock si libera.
+
+    Watermark = MAX(id) al primo avvio del backfill: le righe successive le
+    indicizzano già i trigger, qui si processano solo id <= watermark. Il
+    progresso (last id) è salvato NELLA STESSA transazione del batch → resume
+    esatto anche se l'app viene chiusa a metà, senza duplicati nell'indice.
+    A fine corsa setta il flag persistente: da lì la ricerca usa FTS.
+
+    Interrompibile: `stop_fts_backfill()` (chiamata a chiusura app) setta
+    l'evento e il loop esce al confine del batch corrente (~ms) — il lavoro
+    riprende da dove era al prossimo avvio."""
+    import threading
+    global _fts_thread, _fts_stop
+    _fts_stop = threading.Event()
+    stop = _fts_stop
+
+    def work():
+        global _fts_ready
+        try:
+            conn = get_conn()
+            c = conn.cursor()
+
+            def _get(key, default=None):
+                row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+                return row[0] if row else default
+
+            jobs = (
+                ("screenshots",    "screenshots_fts", ("text",)),
+                ("audio_segments", "audio_fts",       ("transcript",)),
+                ("web_pages",      "web_fts",         ("text", "title", "url")),
+            )
+            total, stopped = 0, False
+            for src, fts, cols in jobs:
+                wm_key, last_key = f"fts_wm_{fts}", f"fts_last_{fts}"
+                wm = _get(wm_key)
+                if wm is None:
+                    wm = c.execute(f"SELECT COALESCE(MAX(id), 0) FROM {src}").fetchone()[0]
+                    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                              (wm_key, str(wm)))
+                    conn.commit()
+                wm = int(wm)
+                last = int(_get(last_key, 0) or 0)
+                col_sql = ", ".join(cols)
+                ph = ",".join("?" * (len(cols) + 1))
+                while last < wm:
+                    if stop.is_set():
+                        stopped = True
+                        break
+                    rows = c.execute(
+                        f"SELECT id, {col_sql} FROM {src} WHERE id > ? AND id <= ? "
+                        f"ORDER BY id LIMIT 2000", (last, wm)).fetchall()
+                    if not rows:
+                        break
+                    for row in rows:
+                        c.execute(f"INSERT INTO {fts}(rowid, {col_sql}) VALUES ({ph})", row)
+                    last = rows[-1][0]
+                    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                              (last_key, str(last)))
+                    conn.commit()
+                    total += len(rows)
+                if stopped:
+                    break
+            if stopped:
+                print(f"[DB] FTS backfill sospeso ({total} righe fatte): riprende al prossimo avvio.")
+            else:
+                c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                          ("fts_built_v1", "1"))
+                conn.commit()
+                _fts_ready = True
+                print(f"[DB] FTS backfill completato ({total} righe): ricerca full-text attiva.")
+            conn.close()
+        except Exception as e:
+            print(f"[DB] FTS backfill fallito (ricerca resta su LIKE): {e}")
+
+    _fts_thread = threading.Thread(target=work, daemon=True, name="fts-backfill")
+    _fts_thread.start()
+
+
+def stop_fts_backfill(timeout=3.0):
+    """Ferma il backfill FTS se in corso e attende l'uscita (max `timeout`s).
+    Da chiamare a chiusura app PRIMA del checkpoint: evita contesa sul write
+    lock. Nessuna perdita: il progresso è per-batch, riprende al riavvio."""
+    t, ev = _fts_thread, _fts_stop
+    if ev is not None:
+        ev.set()
+    if t is not None and t.is_alive():
+        t.join(timeout)
 
 def get_conn():
     conn = _connect_raw(DB_PATH, _get_key())
@@ -310,8 +511,19 @@ def init_db():
     else:
         print("[DB] sqlite-vec non disponibile; uso fallback numpy.")
 
+    # ── FTS5 (ricerca testuale veloce) ──
+    _setup_fts(conn)
+
     conn.commit()
     conn.close()
+
+    # Backfill FTS one-shot (in background). Se già fatto, attiva subito.
+    global _fts_ready
+    if _fts_available:
+        if get_setting("fts_built_v1") == "1":
+            _fts_ready = True
+        else:
+            _fts_backfill_async()
 
     # Migrazione one-shot embedding esistenti → vec tables
     if _vec_available:
@@ -472,8 +684,35 @@ def restore_db(src_zip_path):
         return False, f"Errore restore: {e}"
 
 
+def shutdown_db():
+    """Manutenzione RAPIDA a chiusura (sostituisce il VACUUM che ci stava):
+    checkpoint WAL (riassorbe il -wal nel file principale) + PRAGMA optimize.
+    NIENTE VACUUM: su un DB grande è una riscrittura COMPLETA del file (minuti
+    su decine di GB) e in Déjà non si cancella quasi mai nulla → freelist ~0,
+    recuperava zero spazio. `vacuum_db()` resta per uso manuale/on-demand.
+    Chiamare DOPO aver fermato i thread (checkpoint TRUNCATE vuole il DB quieto;
+    se resta un writer fa comunque un checkpoint parziale senza bloccare)."""
+    import time as _t
+    t0 = _t.time()
+    try:
+        conn = get_conn()
+        try:
+            # Busy timeout CORTO (il default 30s qui allungherebbe la chiusura
+            # se un thread ritardatario tiene ancora un lock): meglio un
+            # checkpoint parziale che un'app che non si chiude.
+            conn.execute("PRAGMA busy_timeout=3000")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("PRAGMA optimize")
+        finally:
+            conn.close()
+        print(f"[DB] Shutdown checkpoint OK ({_t.time() - t0:.1f}s).")
+    except Exception as e:
+        print(f"[DB] shutdown checkpoint errore: {e}")
+
+
 def vacuum_db():
-    """Compatta DB. Pesante: chiama solo a shutdown o on-demand."""
+    """Compatta DB (riscrittura completa: PESANTE su DB grandi, minuti).
+    Solo on-demand/manuale — NON viene più chiamato a chiusura app."""
     import os
     try:
         size_before = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0

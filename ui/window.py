@@ -789,15 +789,32 @@ class ChatWorker(QThread):
         super().__init__()
         self._history = list(history)
         self._message = message
+        self._cancelled = False
+
+    def cancel(self):
+        """Ferma lo stream al prossimo evento. Il generatore viene chiuso
+        (GeneratorExit) e il thread esce: nessuna attesa per l'utente, che
+        prima poteva solo subire una ricerca agentica lunga."""
+        self._cancelled = True
+
+    def cancelled(self) -> bool:
+        return self._cancelled
 
     def run(self):
         try:
-            for kind, content in ai_assistant.chat_stream(self._history, self._message):
-                if kind == "done":
-                    break
-                self.chunk.emit(kind, content or "")
+            stream = ai_assistant.chat_stream(self._history, self._message)
+            try:
+                for kind, content in stream:
+                    if self._cancelled:
+                        break
+                    if kind == "done":
+                        break
+                    self.chunk.emit(kind, content or "")
+            finally:
+                stream.close()
         except Exception as e:
-            self.chunk.emit("error", str(e))
+            if not self._cancelled:
+                self.chunk.emit("error", str(e))
         self.finished_streaming.emit()
 
 class VoiceWorker(QThread):
@@ -1578,6 +1595,199 @@ class AssistantTurnBubble(QWidget):
         self.inner.addWidget(card)
 
 
+class _PulseDots(QWidget):
+    """Tre punti che pulsano: 'sto lavorando' senza rubare attenzione."""
+
+    def __init__(self, color=C_AI_HEX, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(26, 10)
+        self._color = QColor(color)
+        self._phase = 0.0
+        self._t = QTimer(self)
+        self._t.setInterval(110)
+        self._t.timeout.connect(self._step)
+
+    def start(self):
+        if not self._t.isActive():
+            self._t.start()
+        self.setVisible(True)
+
+    def stop(self):
+        self._t.stop()
+
+    def _step(self):
+        self._phase = (self._phase + 0.14) % 1.0
+        self.update()
+
+    def paintEvent(self, _e):
+        import math
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        for i in range(3):
+            ph = (self._phase + i * 0.22) % 1.0
+            a = 0.25 + 0.75 * (1 + math.cos(ph * 2 * math.pi)) / 2
+            c = QColor(self._color); c.setAlphaF(a)
+            p.setBrush(c)
+            p.drawEllipse(QRectF(1 + i * 9, 2.5, 5, 5))
+        p.end()
+
+
+class TurnActivity(QWidget):
+    """Tutto ciò che l'AI fa in un turno, in UN solo riquadro vivo.
+
+    Prima ogni evento 'tool' diventava una chip permanente in cronologia: in
+    modalità agentica erano 10-15 righe di avanzamento che restavano lì per
+    sempre, seppellendo domande e risposte. Qui invece si vede il passo CORRENTE,
+    si può espandere per seguire tutto, e a fine turno collassa in una riga di
+    riepilogo. Lo storico non si perde: è dentro, a un clic."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background:transparent;")
+        self._steps = []
+        self._open = False
+        self._t0 = _time.time()
+
+        # Larghezza allineata alle bolle (non a tutta la colonna): a piena
+        # larghezza il riquadro pesava più della risposta che lo accompagna.
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
+        self._card = QFrame(); self._card.setObjectName("turnact")
+        self._card.setMaximumWidth(620)
+        self._paint_card(False)
+        root.addWidget(self._card)
+        root.addStretch()
+        cl = QVBoxLayout(self._card)
+        cl.setContentsMargins(12, 8, 10, 8); cl.setSpacing(0)
+
+        head = QHBoxLayout(); head.setContentsMargins(0, 0, 0, 0); head.setSpacing(9)
+        self._dots = _PulseDots(); self._dots.start()
+        self._tick = QLabel("✓"); self._tick.setVisible(False)
+        self._tick.setStyleSheet(f"color:{EMERALD}; font-size:12px; background:transparent;")
+        self._label = QLabel("Preparo la ricerca…")
+        self._label.setFont(QFont(UI_FONT, 10))
+        self._label.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent;")
+        self._count = QLabel("")
+        self._count.setFont(QFont("Consolas", 8))
+        self._count.setStyleSheet("color:#6c6c78; background:transparent;")
+        self._chev = QLabel("▾")
+        self._chev.setStyleSheet("color:#6c6c78; font-size:9px; background:transparent;")
+        head.addWidget(self._dots); head.addWidget(self._tick)
+        head.addWidget(self._label, stretch=1)
+        head.addWidget(self._count); head.addWidget(self._chev)
+        cl.addLayout(head)
+
+        self._detail = QWidget(); self._detail.setVisible(False)
+        self._detail.setStyleSheet("background:transparent;")
+        self._dl = QVBoxLayout(self._detail)
+        self._dl.setContentsMargins(3, 8, 0, 2); self._dl.setSpacing(4)
+        cl.addWidget(self._detail)
+
+        self._card.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._card.mouseReleaseEvent = self._toggle
+
+    def _paint_card(self, hover):
+        bg = "rgba(255,255,255,0.045)" if hover else "rgba(255,255,255,0.022)"
+        self._card.setStyleSheet(
+            f"QFrame#turnact{{background:{bg}; border:1px solid {BORDER_STR};"
+            " border-radius:11px;} QFrame#turnact QLabel{background:transparent; border:none;}")
+
+    def _toggle(self, _e=None):
+        self._open = not self._open
+        self._detail.setVisible(self._open)
+        self._chev.setText("▴" if self._open else "▾")
+
+    def add_step(self, text):
+        """Nuovo passo: diventa la riga viva, e resta nello storico interno."""
+        text = (text or "").strip()
+        if not text:
+            return
+        self._steps.append(text)
+        # Le righe indentate degli agenti ('  Agente 2/4 → …') sono dettaglio:
+        # in testa si mostra il passo, ma senza il rientro che qui non serve.
+        self._label.setText(text.strip()[:110])
+        self._count.setText(str(len(self._steps)))
+        row = QLabel("·  " + text.strip())
+        row.setWordWrap(True)
+        row.setFont(QFont("Consolas", 8))
+        row.setStyleSheet("color:#7c7c88; background:transparent;")
+        self._dl.addWidget(row)
+
+    def finish(self, note=""):
+        """Turno finito: riepilogo compatto (i passi restano espandibili)."""
+        self._dots.stop(); self._dots.setVisible(False)
+        self._tick.setVisible(True)
+        dt = _time.time() - self._t0
+        n = len(self._steps)
+        summary = f"{n} passagg{'io' if n == 1 else 'i'} · {dt:.1f}s".replace(".", ",")
+        self._label.setText(f"{note} · {summary}" if note else summary)
+        self._label.setStyleSheet("color:#6c6c78; background:transparent;")
+        self._count.setText("")
+
+    def fail(self, why=""):
+        self._dots.stop(); self._dots.setVisible(False)
+        self._tick.setText("!"); self._tick.setVisible(True)
+        self._tick.setStyleSheet("color:#fca5a5; font-size:12px; background:transparent;")
+        self._label.setText(why or "interrotto")
+
+
+class ChatInput(QTextEdit):
+    """Input della chat: multi-riga che cresce da solo.
+
+    Era una `QLineEdit`: una riga sola, testo lungo invisibile mentre lo scrivi e
+    nessun modo di andare a capo. Qui **Invio invia**, **Shift+Invio va a capo**,
+    e l'altezza segue il contenuto entro un tetto."""
+    submitted = pyqtSignal()
+
+    MIN_H, MAX_H = 38, 132
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptRichText(False)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setFont(QFont(UI_FONT, 11))
+        self.setFixedHeight(self.MIN_H)
+        self.setStyleSheet(
+            "QTextEdit{background:rgba(255,255,255,0.04); color:#f3f4f6; "
+            f"border:1px solid {BORDER_STR}; border-radius:10px; padding:8px 12px;}}"
+            "QTextEdit:focus{border:1px solid rgba(167,139,250,0.5);}"
+            "QScrollBar:vertical{background:transparent; width:6px; margin:4px 2px;}"
+            "QScrollBar::handle:vertical{background:rgba(255,255,255,0.14); border-radius:3px;}"
+            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}")
+        self.textChanged.connect(self._autosize)
+
+    def _autosize(self):
+        doc = self.document()
+        doc.setTextWidth(max(1, self.viewport().width()))
+        h = int(doc.size().height()) + 18
+        self.setFixedHeight(max(self.MIN_H, min(self.MAX_H, h)))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e); self._autosize()
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if e.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                super().keyPressEvent(e); return
+            self.submitted.emit(); return
+        super().keyPressEvent(e)
+
+    # Compatibilità con il codice che trattava l'input come QLineEdit.
+    def text(self):
+        return self.toPlainText()
+
+    def setText(self, s):
+        self.setPlainText(s or "")
+
+    def clear(self):
+        self.setPlainText("")
+
+    def setPlaceholderText(self, s):
+        super().setPlaceholderText(s or "")
+
+
 # ── Chat page ──────────────────────────────────────────────────────
 class ChatPage(QWidget):
     send_clicked = pyqtSignal(str)
@@ -1627,9 +1837,13 @@ class ChatPage(QWidget):
         self.scroll.setWidget(self._msg_holder)
         root.addWidget(self.scroll, stretch=1)
 
-        # Empty state
+        # Empty state — con esempi CLICCABILI: davanti a una chat vuota la
+        # domanda vera dell'utente è "cosa posso chiedergli?", e un sottotitolo
+        # non risponde. Gli esempi coprono le quattro fonti (schermo, audio,
+        # web, eventi) e insegnano cosa sa fare.
         self.empty_state = QWidget(); self.empty_state.setStyleSheet("background:transparent;")
         es = QVBoxLayout(self.empty_state); es.setAlignment(Qt.AlignmentFlag.AlignCenter); es.setSpacing(10)
+        es.setContentsMargins(0, 26, 0, 10)
         es_icon = QLabel("◆"); es_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         es_icon.setFont(QFont(UI_FONT, 28))
         es_icon.setStyleSheet(f"color:{C_AI_HEX}; background:transparent;")
@@ -1644,6 +1858,15 @@ class ChatPage(QWidget):
         es_s.setFont(QFont(UI_FONT, 10))
         es_s.setStyleSheet(f"color:{TEXT_SECONDARY}; background:transparent; line-height:1.6;")
         es.addWidget(es_s)
+
+        sug = QWidget(); sug.setStyleSheet("background:transparent;")
+        sl = QVBoxLayout(sug); sl.setContentsMargins(0, 12, 0, 0); sl.setSpacing(7)
+        for icon, text_ in (("🖥", "Cosa stavo leggendo ieri pomeriggio?"),
+                            ("🎙", "Riassumi l'ultima telefonata"),
+                            ("🌐", "Quanto costava quella cosa che ho visto online?"),
+                            ("⚡", "A che ora ho aperto Chrome oggi?")):
+            sl.addWidget(self._suggestion_chip(icon, text_))
+        es.addWidget(sug, alignment=Qt.AlignmentFlag.AlignCenter)
         self.msg_layout.insertWidget(0, self.empty_state)
 
         # Attachment bar (chip sopra la barra di scrittura, stile "file allegato").
@@ -1657,18 +1880,13 @@ class ChatPage(QWidget):
         self.attach_bar.setVisible(False)
         root.addWidget(self.attach_bar)
 
-        # Input row
+        # Input row — allineata in basso: l'input cresce verso l'alto e i
+        # bottoni restano appoggiati alla sua ultima riga.
         input_row = QHBoxLayout(); input_row.setSpacing(8)
-        self.input = QLineEdit()
+        input_row.setAlignment(Qt.AlignmentFlag.AlignBottom)
+        self.input = ChatInput()
         self.input.setPlaceholderText(t("win.chat_placeholder"))
-        self.input.setFont(QFont(UI_FONT, 11))
-        self.input.setFixedHeight(38)
-        self.input.setStyleSheet(
-            "QLineEdit{background:rgba(255,255,255,0.04); color:#f3f4f6; "
-            f"border:1px solid {BORDER_STR}; border-radius:10px; padding:0 14px; }}"
-            f"QLineEdit:focus{{border:1px solid rgba(167,139,250,0.5);}}"
-        )
-        self.input.returnPressed.connect(self._on_send)
+        self.input.submitted.connect(self._on_send)
         input_row.addWidget(self.input, stretch=1)
 
         # Mic button (voice input)
@@ -1684,7 +1902,30 @@ class ChatPage(QWidget):
         self.send_btn.setStyleSheet(SS_BTN_AI_PRIMARY)
         self.send_btn.clicked.connect(self._on_send)
         input_row.addWidget(self.send_btn)
+
+        # Stop: una ricerca agentica può durare parecchio e prima l'unica
+        # opzione era aspettarla. Prende il posto di "Invia" mentre risponde.
+        self.stop_btn = QPushButton("Stop"); self.stop_btn.setFixedHeight(38)
+        self.stop_btn.setFixedWidth(80); self.stop_btn.setVisible(False)
+        self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.stop_btn.setStyleSheet(
+            "QPushButton{background:rgba(239,68,68,0.14); color:#fca5a5;"
+            " border:1px solid rgba(239,68,68,0.34); border-radius:10px;"
+            " font-size:12px; font-weight:600;}"
+            "QPushButton:hover{background:rgba(239,68,68,0.24); color:#fff;}")
+        input_row.addWidget(self.stop_btn)
+
+        hint = QLabel("Invio per inviare · Maiusc+Invio per andare a capo")
+        hint.setFont(QFont(UI_FONT, 8))
+        hint.setStyleSheet("color:#5b5b66; background:transparent;")
+        hint.setContentsMargins(3, 2, 0, 0)
         root.addLayout(input_row)
+        root.addWidget(hint)
+
+        # Auto-scroll: connesso UNA volta qui. Stava (male indentato) dentro
+        # `_set_mic_style` → si riconnetteva a ogni toggle del microfono,
+        # accumulando slot duplicati sullo stesso segnale.
+        self.scroll.verticalScrollBar().rangeChanged.connect(self._auto_scroll)
 
     def _set_mic_style(self, recording):
         if recording:
@@ -1702,12 +1943,25 @@ class ChatPage(QWidget):
             )
             self.mic_btn.setText("🎙")
 
-        # Auto-scroll trigger
-        self.scroll.verticalScrollBar().rangeChanged.connect(self._auto_scroll)
+    def _suggestion_chip(self, icon, text_):
+        """Esempio cliccabile dell'empty state: al clic parte la domanda."""
+        b = QPushButton(f"  {icon}   {text_}")
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        b.setFixedHeight(34)
+        b.setFont(QFont(UI_FONT, 10))
+        b.setStyleSheet(
+            "QPushButton{background:rgba(255,255,255,0.03); color:#b6b6c2;"
+            f" border:1px solid {BORDER_STR}; border-radius:10px;"
+            " padding:0 14px; text-align:left;}"
+            "QPushButton:hover{background:rgba(167,139,250,0.12);"
+            " border:1px solid rgba(167,139,250,0.32); color:#fff;}")
+        b.clicked.connect(lambda _=False, q=text_: self.send_clicked.emit(q))
+        return b
 
     def _on_send(self):
         text = self.input.text().strip()
-        if not text: return
+        if not text and not self.has_attachment():
+            return
         self.input.clear()
         self.send_clicked.emit(text)
 
@@ -1822,6 +2076,13 @@ class ChatPage(QWidget):
         self.msg_layout.insertWidget(self.msg_layout.count() - 1, w)
         return w
 
+    def add_activity(self):
+        """Riquadro attività del turno (vedi TurnActivity)."""
+        self._hide_empty()
+        w = TurnActivity()
+        self.msg_layout.insertWidget(self.msg_layout.count() - 1, w)
+        return w
+
     def add_error(self, msg):
         w, _ = _make_bubble(f"⚠  {msg}", "error")
         self.msg_layout.insertWidget(self.msg_layout.count() - 1, w)
@@ -1855,9 +2116,14 @@ class ChatPage(QWidget):
         self.empty_state.show()
 
     def set_busy(self, busy):
-        self.input.setEnabled(not busy)
-        self.send_btn.setEnabled(not busy)
-        self.send_btn.setText("…" if busy else t("win.chat_send"))
+        # L'input resta ABILITATO mentre risponde: si può già scrivere la
+        # domanda dopo (prima si bloccava la tastiera e si perdeva il filo).
+        # A cambiare è il bottone: Invia → Stop.
+        self.send_btn.setVisible(not busy)
+        self.stop_btn.setVisible(bool(busy))
+        self.mic_btn.setEnabled(not busy)
+        if not busy:
+            self.send_btn.setText(t("win.chat_send"))
 
 
 # ── Diary dialog (daily summaries AI) ─────────────────────────────

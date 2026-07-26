@@ -10,6 +10,7 @@ Tutto è **OFF di default**: se la feature non è abilitata o lo stato è assent
 stantio, `should_skip()` ritorna False e la cattura procede come sempre.
 """
 import os
+import re
 import json
 import time
 import logging
@@ -101,8 +102,37 @@ def read_state():
     return st
 
 
-# ── Foreground browser (ctypes) ────────────────────────────────────
+# ── Foreground browser ─────────────────────────────────────────────
+# Nomi WM_CLASS dei browser su Linux/X11 (equivalente degli exe su Windows).
+_BROWSERS_LINUX = {
+    "google-chrome", "chromium", "chromium-browser", "microsoft-edge",
+    "brave-browser", "firefox", "opera", "vivaldi",
+}
+_fg_cache = {"ts": 0.0, "val": ""}  # xdotool = subprocess: cache 2s
+
+
+def _foreground_exe_linux() -> str:
+    import time as _t
+    import subprocess
+    now = _t.time()
+    if now - _fg_cache["ts"] < 2:
+        return _fg_cache["val"]
+    val = ""
+    try:
+        r = subprocess.run(["xdotool", "getactivewindow", "getwindowclassname"],
+                           capture_output=True, text=True, timeout=2)
+        if r.returncode == 0:
+            val = r.stdout.strip().lower()
+    except Exception:
+        pass
+    _fg_cache.update(ts=now, val=val)
+    return val
+
+
 def _foreground_exe() -> str:
+    import sys
+    if sys.platform != "win32":
+        return _foreground_exe_linux() if sys.platform == "linux" else ""
     try:
         import ctypes
         from ctypes import wintypes
@@ -132,10 +162,18 @@ def _foreground_exe() -> str:
 
 
 def _browser_set() -> set:
-    """Lista browser nota + eventuali exe extra aggiunti dall'utente
+    """Lista browser nota + eventuali extra aggiunti dall'utente
     (setting `web_browsers_extra`, separati da virgola) — così un browser nuovo
-    non rompe la feature."""
+    non rompe la feature. Windows: nomi exe. Linux: nomi WM_CLASS."""
+    import sys
     extra = (get_setting("web_browsers_extra", "") or "")
+    if sys.platform == "linux":
+        out = set(_BROWSERS_LINUX)
+        for e in extra.replace("\n", ",").split(","):
+            e = e.strip().lower().removesuffix(".exe")
+            if e:
+                out.add(e)
+        return out
     out = set(_BROWSERS)
     for e in extra.replace("\n", ",").split(","):
         e = e.strip().lower()
@@ -199,17 +237,72 @@ def _host_script() -> str:
     return paths.resource_path(os.path.join("extension", "host", "web_host.py"))
 
 
-def install_native_host(ext_id: str = None):
-    """Registra l'host native messaging per i browser Chromium (HKCU).
-    Richiede l'ID dell'estensione (incollato dall'utente). Ritorna (ok, msg)."""
+# Linux: i browser Chromium leggono i manifest da directory utente fisse
+# (niente registro). L'host è uno script sh invece del .bat.
+_NM_LINUX_DIRS = (
+    "~/.config/google-chrome/NativeMessagingHosts",
+    "~/.config/chromium/NativeMessagingHosts",
+    "~/.config/microsoft-edge/NativeMessagingHosts",
+    "~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+)
+
+
+def _write_manifest(mpath: str, host_path: str, ext_id: str):
+    manifest = {
+        "name": HOST_ID,
+        "description": "Deja browser bridge",
+        "path": host_path,
+        "type": "stdio",
+        "allowed_origins": [f"chrome-extension://{ext_id}/"],
+    }
+    with open(mpath, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+
+def _install_native_host_linux(ext_id: str):
     import sys
-    ext_id = (ext_id or get_setting("web_ext_id", "") or "").strip()
-    if not ext_id or len(ext_id) != 32 or not ext_id.isalpha():
+    d = paths.data_dir()
+    sh = os.path.join(d, "web_host.sh")
+    if getattr(sys, "frozen", False):
+        body = f'#!/bin/sh\nexec "{sys.executable}" --web-host "$@"\n'
+    else:
+        body = f'#!/bin/sh\nexec "{sys.executable}" "{_host_script()}" "$@"\n'
+    with open(sh, "w", encoding="utf-8", newline="\n") as f:
+        f.write(body)
+    os.chmod(sh, 0o755)
+    written = []
+    for base in _NM_LINUX_DIRS:
+        try:
+            bdir = os.path.expanduser(base)
+            os.makedirs(bdir, exist_ok=True)
+            mpath = os.path.join(bdir, HOST_ID + ".json")
+            _write_manifest(mpath, sh, ext_id)
+            written.append(mpath)
+        except Exception:
+            pass
+    if not written:
+        return False, "nessuna directory browser scrivibile"
+    _log.info("Native host (linux) registrato per ext_id=%s", ext_id)
+    return True, written[0]
+
+
+def install_native_host(ext_id: str = None):
+    """Registra l'host native messaging per i browser Chromium.
+    Windows: chiavi HKCU + manifest .bat. Linux: manifest nelle directory
+    NativeMessagingHosts dei browser + script sh. Ritorna (ok, msg)."""
+    import sys
+    ext_id = (ext_id or get_setting("web_ext_id", "") or "").strip().lower()
+    # Un ID Chrome è esattamente 32 caratteri in a–p. `isalpha()` è
+    # unicode-aware: accettava 32 lettere accentate/cirilliche e registrava un
+    # manifest inutile dicendo "fatto".
+    if not re.fullmatch(r"[a-p]{32}", ext_id):
         return False, "ID estensione non valido"
+    if sys.platform == "linux":
+        return _install_native_host_linux(ext_id)
     try:
         import winreg
     except Exception:
-        return False, "registrazione disponibile solo su Windows"
+        return False, "registrazione non disponibile su questa piattaforma"
 
     d = paths.data_dir()
     bat = os.path.join(d, "web_host.bat")
@@ -243,7 +336,17 @@ def install_native_host(ext_id: str = None):
 
 
 def uninstall_native_host():
-    """Rimuove le chiavi registro dell'host (best effort)."""
+    """Rimuove la registrazione dell'host (best effort)."""
+    import sys
+    if sys.platform == "linux":
+        for base in _NM_LINUX_DIRS:
+            try:
+                p = os.path.join(os.path.expanduser(base), HOST_ID + ".json")
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+        return
     try:
         import winreg
     except Exception:

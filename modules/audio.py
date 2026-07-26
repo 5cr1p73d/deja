@@ -1,7 +1,22 @@
 # modules/audio.py
+import sys
 import time, queue, threading, logging, json
 import numpy as np
-import pyaudiowpatch as pyaudio
+# Backend per piattaforma:
+# - Windows: pyaudiowpatch (WASAPI loopback per l'audio di sistema).
+# - Linux: pyaudio standard — il "loopback" sono le sorgenti MONITOR di
+#   PulseAudio/PipeWire (device di INPUT con 'monitor' nel nome).
+# Se nessuno importabile → pyaudio=None e la cattura audio degrada senza
+# far crashare l'avvio (main importa questo modulo subito).
+try:
+    import pyaudiowpatch as pyaudio
+    _HAS_WPATCH = True
+except ImportError:
+    _HAS_WPATCH = False
+    try:
+        import pyaudio
+    except ImportError:
+        pyaudio = None
 from datetime import datetime, timezone
 from scipy import signal as _spsig
 from db import get_conn
@@ -9,6 +24,29 @@ import config  # leggere config.X dinamicamente: un import by-value catturerebbe
 # i default ignorando i valori salvati (load_settings_into_config).
 import io
 import soundfile as sf
+
+
+def _is_monitor_name(name: str) -> bool:
+    n = (name or "").lower()
+    return ".monitor" in n or "monitor of" in n
+
+
+def _iter_loopback_devices(pa):
+    """Device 'loopback' in modo uniforme tra piattaforme.
+    Windows/pyaudiowpatch: generator WASAPI dedicato. Linux: input monitor."""
+    if _HAS_WPATCH:
+        try:
+            yield from pa.get_loopback_device_info_generator()
+        except Exception:
+            return
+        return
+    for i in range(pa.get_device_count()):
+        try:
+            d = pa.get_device_info_by_index(i)
+        except Exception:
+            continue
+        if d["maxInputChannels"] > 0 and _is_monitor_name(d.get("name")):
+            yield d
 
 _model = None
 _model_lock = threading.Lock()
@@ -27,13 +65,16 @@ def get_setting(key):
     conn.close(); return row[0] if row else None
 
 def list_devices():
+    if pyaudio is None:
+        return []
     pa = pyaudio.PyAudio(); devices = []
     for i in range(pa.get_device_count()):
         dev = pa.get_device_info_by_index(i)
-        if dev["maxInputChannels"] > 0 and not dev.get("isLoopbackDevice", False):
+        if (dev["maxInputChannels"] > 0 and not dev.get("isLoopbackDevice", False)
+                and not (not _HAS_WPATCH and _is_monitor_name(dev.get("name")))):
             devices.append({"index":dev["index"],"name":dev["name"],"loopback":False})
     try:
-        for dev in pa.get_loopback_device_info_generator():
+        for dev in _iter_loopback_devices(pa):
             devices.append({"index":dev["index"],"name":dev["name"],"loopback":True})
     except: pass
     pa.terminate(); return devices
@@ -53,10 +94,11 @@ def _device_maps(pa):
             d = pa.get_device_info_by_index(i)
         except Exception:
             continue
-        if d["maxInputChannels"] > 0 and not d.get("isLoopbackDevice", False):
+        if (d["maxInputChannels"] > 0 and not d.get("isLoopbackDevice", False)
+                and not (not _HAS_WPATCH and _is_monitor_name(d.get("name")))):
             mics.setdefault(d["name"], d["index"])
     try:
-        for d in pa.get_loopback_device_info_generator():
+        for d in _iter_loopback_devices(pa):
             loops.setdefault(d["name"], d["index"])
     except Exception:
         pass
@@ -247,6 +289,8 @@ def record_and_transcribe(stop_event, max_seconds=60, device_index=None):
     """Registra dal mic via callback (stesso pattern di capture continua, robusto).
     Trascrive con Whisper. Ritorna (text, status_log)."""
     log = []
+    if pyaudio is None:
+        return "", "pyaudio_missing"
     try:
         _load_model()
         log.append("model_ready")
@@ -405,7 +449,7 @@ def _setup_streams(pa, stop_event, chunk_secs):
     if out_idx is not None:
         idx = out_idx
         try:
-            lb_dev = next((d for d in pa.get_loopback_device_info_generator() if d["index"]==idx), None)
+            lb_dev = next((d for d in _iter_loopback_devices(pa) if d["index"]==idx), None)
             if lb_dev:
                 rate=int(lb_dev["defaultSampleRate"]); ch=min(lb_dev["maxInputChannels"],2)
                 buf=[]; q_pc=queue.Queue(); tf=int(rate*chunk_secs)
@@ -469,6 +513,10 @@ def run(stop_event):
     hot-swap device, e stream morti (watchdog). Gli stream restano aperti SOLO
     quando la cattura audio è abilitata e c'è almeno un device configurato.
     Il modello Whisper viene caricato pigramente alla prima attivazione."""
+    if pyaudio is None:
+        print("[Audio] Backend PyAudio non disponibile su questa piattaforma: "
+              "cattura audio disattivata.")
+        return
     chunk_secs = config.AUDIO_CHUNK_SECONDS
     pa = None
     streams, proc_threads = [], []

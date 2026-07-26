@@ -1,33 +1,61 @@
 # modules/search.py
 import re
+from collections import Counter, OrderedDict
+
 import numpy as np
 
-from db import get_conn, vec_available, quantize_int8
+from db import get_conn, vec_available, fts_ready, quantize_int8
 import config  # AUDIO_MIN_SCORE / EMBEDDING_MODEL letti dinamicamente (vedi capturer.py)
 from config import TOP_K_RESULTS, AUDIO_SEMANTIC_PENALTY, SCREENSHOT_MIN_SCORE
 MIN_SCORE_SCREENSHOT = SCREENSHOT_MIN_SCORE
 
-_model = None
-
-# Cache embedding matrici in memoria. Invalidate quando count cambia.
+# Cache embedding matrici in memoria (fallback numpy quando sqlite-vec manca).
+# Invalidate quando count cambia.
 _ss_cache = {"count": -1, "ids": [], "mat": None}
 _au_cache = {"count": -1, "ids": [], "mat": None}
 
+# Cache LRU degli embedding delle QUERY: la stessa ricerca ripetuta (o le
+# sub-query dell'agentica riusate tra turni) salta l'encode (~50-200ms CPU).
+_q_emb_cache = OrderedDict()   # (model_name, text) -> np.ndarray
+_Q_EMB_CAP = 128
+
 
 def _get_model():
-    """Carica (lazy) il modello embedding. Import di torch differito qui dentro:
-    se le DLL native non si caricano (WinError 1114) ritorna None e la ricerca
-    prosegue in modalità testuale esatta, senza crashare."""
-    global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer(config.EMBEDDING_MODEL)
-    return _model
+    """Modello embedding CONDIVISO (modules.embedder): una sola copia in RAM
+    con l'indexer. Import di torch differito: se le DLL native non si caricano
+    (WinError 1114) l'eccezione propaga e la ricerca degrada a solo testo."""
+    from modules import embedder
+    return embedder.get_model()
+
+
+def _encode_queries(texts):
+    """Encode di N query in UN SOLO batch (con cache LRU per singola query).
+    Ritorna dict text -> vettore normalizzato. Solleva se il modello manca."""
+    out, missing = {}, []
+    mname = config.EMBEDDING_MODEL
+    for t in texts:
+        key = (mname, t)
+        if key in _q_emb_cache:
+            _q_emb_cache.move_to_end(key)
+            out[t] = _q_emb_cache[key]
+        elif t not in out and t not in missing:
+            missing.append(t)   # niente doppioni: encode di 1 testo 2 volte
+    if missing:
+        from modules import embedder
+        vecs = embedder.encode(missing)
+        for t, v in zip(missing, vecs):
+            out[t] = v
+            _q_emb_cache[(mname, t)] = v
+        while len(_q_emb_cache) > _Q_EMB_CAP:
+            _q_emb_cache.popitem(last=False)
+    return out
+
 
 def invalidate_cache():
     """Forza ricarica embedding alla prossima query (es. dopo clear DB)."""
     _ss_cache["count"] = -1
     _au_cache["count"] = -1
+    _q_emb_cache.clear()
 
 def _load_screenshot_embeddings(conn):
     c = conn.cursor()
@@ -63,47 +91,46 @@ def _tokenize_query(text: str) -> list[str]:
     """Split su non-word chars, tieni token >= 2 char. Lowercase."""
     return [t for t in re.split(r"[^\w]+", text.lower()) if len(t) >= 2]
 
-def _exact_search_screenshots(conn, text: str) -> list[int]:
-    c = conn.cursor()
-    tokens = _tokenize_query(text)
-    if not tokens:
-        c.execute("SELECT id FROM screenshots WHERE text LIKE ?", (f"%{text}%",))
-        return [r[0] for r in c.fetchall()]
-    where = " AND ".join("LOWER(text) LIKE ?" for _ in tokens)
-    params = tuple(f"%{t}%" for t in tokens)
-    c.execute(f"SELECT id FROM screenshots WHERE {where}", params)
-    return [r[0] for r in c.fetchall()]
+# Tabella sorgente → tabella FTS5 (external content, vedi db.py).
+_FTS_TABLE = {
+    "screenshots":    "screenshots_fts",
+    "audio_segments": "audio_fts",
+    "web_pages":      "web_fts",
+}
 
-def _exact_search_audio(conn, text: str) -> list[int]:
-    c = conn.cursor()
-    tokens = _tokenize_query(text)
-    if not tokens:
-        c.execute("SELECT id FROM audio_segments WHERE transcript LIKE ?", (f"%{text}%",))
-        return [r[0] for r in c.fetchall()]
-    where = " AND ".join("LOWER(transcript) LIKE ?" for _ in tokens)
-    params = tuple(f"%{t}%" for t in tokens)
-    c.execute(f"SELECT id FROM audio_segments WHERE {where}", params)
-    return [r[0] for r in c.fetchall()]
 
-def _exact_search_web(conn, text: str) -> list[int]:
-    c = conn.cursor()
-    tokens = _tokenize_query(text)
-    if not tokens:
-        like = f"%{text}%"
-        c.execute("SELECT id FROM web_pages WHERE text LIKE ? OR title LIKE ? OR url LIKE ?",
-                  (like, like, like))
-        return [r[0] for r in c.fetchall()]
-    where = " AND ".join("(LOWER(text) LIKE ? OR LOWER(title) LIKE ?)" for _ in tokens)
-    params = []
-    for t in tokens:
-        params += [f"%{t}%", f"%{t}%"]
-    c.execute(f"SELECT id FROM web_pages WHERE {where}", tuple(params))
-    return [r[0] for r in c.fetchall()]
+def _fts_coverage(conn, table, tokens, limit=300):
+    """Copertura token via indice FTS5: una MATCH per token ('"tok"*', match a
+    inizio parola, ms anche su tabelle enormi), frac = quota dei token il cui
+    match-set contiene l'id. Ritorna [(id, frac)] ordinato per copertura desc,
+    [] se zero hit, None se FTS non pronto/errore (→ fallback LIKE)."""
+    fts = _FTS_TABLE.get(table)
+    if not fts or not fts_ready() or not tokens:
+        return None
+    counts = Counter()
+    try:
+        for t in tokens:
+            # ORDER BY rowid DESC: senza, FTS5 restituisce i match in rowid
+            # ASCENDENTE e il LIMIT tagliava tenendo i ricordi PIÙ VECCHI —
+            # su un token comune (>20k occorrenze) tutto il recente spariva
+            # dalla ricerca. Gli id crescono nel tempo → DESC = più recenti.
+            rows = conn.execute(
+                f"SELECT rowid FROM {fts} WHERE {fts} MATCH ? ORDER BY rowid DESC LIMIT 20000",
+                (f'"{t}"*',),
+            ).fetchall()
+            for (rid,) in rows:
+                counts[rid] += 1
+    except Exception as e:
+        print(f"[search] fts {fts} fail: {e}")
+        return None
+    n = len(tokens)
+    ranked = sorted(counts.items(), key=lambda kv: -kv[1])[:limit]
+    return [(rid, c / n) for rid, c in ranked]
 
-def _coverage_search(conn, table, cols, text, limit=300):
-    """Ricerca testuale OR con **copertura token**: ritorna [(id, frac)] dove
-    frac = quota dei token presenti (0<frac<=1), ordinato per copertura desc.
-    Molto più tollerante della vecchia AND (che richiedeva TUTTI i token)."""
+
+def _coverage_like(conn, table, cols, text, limit=300):
+    """Fallback LIKE '%tok%' (scan completo): usato quando FTS non è pronto,
+    oppure quando FTS dà 0 hit (il LIKE trova anche substring a metà parola)."""
     tokens = _tokenize_query(text)
     if not tokens:
         like = f"%{text}%"
@@ -130,6 +157,18 @@ def _coverage_search(conn, table, cols, text, limit=300):
     n = len(tokens)
     return [(r[0], (r[1] or 0) / n) for r in rows if (r[1] or 0) > 0]
 
+
+def _coverage_search(conn, table, cols, text, limit=300):
+    """Ricerca testuale con **copertura token**: ritorna [(id, frac)] dove
+    frac = quota dei token presenti (0<frac<=1), ordinato per copertura desc.
+    Prima prova l'indice FTS5 (veloce); LIKE solo come fallback."""
+    hits = _fts_coverage(conn, table, _tokenize_query(text), limit)
+    if hits:
+        return hits
+    # None = FTS non disponibile/errore; [] = 0 hit a inizio parola → il LIKE
+    # può ancora trovare substring interne (es. 'kagate' in 'gonkagate').
+    return _coverage_like(conn, table, cols, text, limit)
+
 def _vec_search(conn, table, q_int8_bytes, k):
     """Usa sqlite-vec per top-k cosine. Ritorna list[(id, similarity)]."""
     try:
@@ -153,209 +192,184 @@ def _ts_int(ts):
 
 _MIC_EMOJI = "\U0001f399️ "
 
-def query(text: str, top_k: int = None) -> list[dict]:
-    k = top_k if top_k else TOP_K_RESULTS
-    conn  = get_conn()
+def _fetch_by_ids(conn, sql_prefix, ids):
+    """Fetch in BATCH (`WHERE id IN`, chunk da 400) invece di un SELECT per id.
+    `sql_prefix` = "SELECT id, ... FROM tabella". Ritorna dict id -> tuple(resto)."""
+    out = {}
+    ids = [i for i in ids if i is not None]
+    for i in range(0, len(ids), 400):
+        chunk = ids[i:i + 400]
+        ph = ",".join("?" * len(chunk))
+        for row in conn.execute(f"{sql_prefix} WHERE id IN ({ph})", chunk):
+            out[row[0]] = row[1:]
+    return out
 
-    # Embedding per la ricerca semantica. Se il modello (torch) non è disponibile
-    # degradiamo alla sola ricerca testuale esatta invece di crashare.
-    q_emb = None
-    try:
-        model = _get_model()
-        q_emb = model.encode([text], convert_to_numpy=True, normalize_embeddings=True)[0]
-    except Exception as e:
-        print(f"[search] modello non disponibile, solo ricerca esatta: {e}")
 
-    screenshots = {}
-    audio       = {}
-    c = conn.cursor()
+def _numpy_hits(loader, conn, q_emb, cap, min_score):
+    """Fallback semantico numpy (sqlite-vec assente): top-`cap` sopra soglia."""
+    ids, mat = loader(conn)
+    if mat is None:
+        return []
+    sims = mat @ q_emb
+    order = np.argsort(-sims)
+    out = []
+    for idx in order:
+        score = float(sims[idx])
+        if score < min_score or len(out) >= cap:
+            break
+        out.append((int(ids[idx]), score))
+    return out
 
-    # ── 1. TESTO screenshot (OR + copertura token) ────────────────
-    for sid, frac in _coverage_search(conn, "screenshots", ["text"], text):
-        key = f"ss_{sid}"
-        if key in screenshots: continue
-        row = c.execute("SELECT ts, text, app FROM screenshots WHERE id = ?", (sid,)).fetchone()
-        if row:
-            screenshots[key] = {
-                "id": sid, "score": 1.0 if frac >= 1.0 else frac, "ts": row[0],
-                "text": row[1], "app": row[2] or "Sconosciuta",
-                "type": "screenshot", "exact": frac >= 1.0
-            }
 
-    # ── 2. SEMANTIC screenshot (sqlite-vec se disponibile) ────────
-    # Saltato del tutto se il modello non è disponibile (q_emb None).
+def _semantic_hits(conn, vec_table, loader, q_emb, q_i8, cap, min_score):
+    """Hit semantici [(id, score)]: sqlite-vec se c'è, altrimenti numpy."""
+    if q_emb is None:
+        return []
+    if q_i8 is not None:
+        hits = _vec_search(conn, vec_table, q_i8, cap)
+        if hits is not None:
+            return [(i, s) for i, s in hits if s >= min_score]
+    if loader is None:
+        return []
+    return _numpy_hits(loader, conn, q_emb, cap, min_score)
+
+
+def _query_with_emb(conn, text: str, q_emb, k: int) -> list[dict]:
+    """Core della ricerca per una singola query (embedding già calcolato o
+    None → solo testo). NON chiude la connessione (riusabile per più query)."""
     sem_cap = max(k * 3, 30)
-    use_vec = vec_available() and q_emb is not None
-    if use_vec:
+    q_i8 = None
+    if q_emb is not None and vec_available():
         try:
             q_i8 = quantize_int8(q_emb).tobytes()
-            vec_hits = _vec_search(conn, "vec_screenshots", q_i8, sem_cap)
         except Exception:
-            vec_hits = None
-    else:
-        vec_hits = None
+            q_i8 = None
+    low_text = text.lower()
 
-    if vec_hits is not None:
-        for sid, score in vec_hits:
-            if len(screenshots) >= sem_cap: break
-            if score < MIN_SCORE_SCREENSHOT: continue
-            key = f"ss_{sid}"
-            if key in screenshots: continue
-            row = c.execute("SELECT ts, text, app FROM screenshots WHERE id = ?", (sid,)).fetchone()
-            if row:
-                screenshots[key] = {
-                    "id": sid, "score": score, "ts": row[0],
-                    "text": row[1], "app": row[2] or "Sconosciuta",
-                    "type": "screenshot", "exact": False
-                }
-    elif q_emb is not None:
-        # Fallback numpy (solo se abbiamo l'embedding della query)
-        ss_ids, ss_mat = _load_screenshot_embeddings(conn)
-        if ss_mat is not None:
-            sims       = ss_mat @ q_emb
-            idx_sorted = np.argsort(-sims)
-            for idx in idx_sorted:
-                if len(screenshots) >= sem_cap: break
-                score = float(sims[idx])
-                if score < MIN_SCORE_SCREENSHOT: break
-                sid = int(ss_ids[idx])
-                key = f"ss_{sid}"
-                if key in screenshots: continue
-                row = c.execute("SELECT ts, text, app FROM screenshots WHERE id = ?", (sid,)).fetchone()
-                if row:
-                    screenshots[key] = {
-                        "id": sid, "score": score, "ts": row[0],
-                        "text": row[1], "app": row[2] or "Sconosciuta",
-                        "type": "screenshot", "exact": False
-                    }
+    # ── SCREENSHOT: testo (FTS/LIKE) + semantica, righe in batch ──
+    ss_entries = {}   # id -> (score, exact)
+    for sid, frac in _coverage_search(conn, "screenshots", ["text"], text):
+        ss_entries.setdefault(sid, (1.0 if frac >= 1.0 else frac, frac >= 1.0))
+    for sid, score in _semantic_hits(conn, "vec_screenshots", _load_screenshot_embeddings,
+                                     q_emb, q_i8, sem_cap, MIN_SCORE_SCREENSHOT):
+        if len(ss_entries) >= sem_cap:
+            break
+        ss_entries.setdefault(sid, (score, False))
+    ss_rows = _fetch_by_ids(conn, "SELECT id, ts, text, app FROM screenshots", ss_entries.keys())
+    screenshots = []
+    for sid, (score, exact) in ss_entries.items():
+        row = ss_rows.get(sid)
+        if row:
+            screenshots.append({
+                "id": sid, "score": score, "ts": row[0],
+                "text": row[1], "app": row[2] or "Sconosciuta",
+                "type": "screenshot", "exact": exact,
+            })
 
-    # ── 3. TESTO audio (OR + copertura token) ─────────────────────
+    # ── AUDIO: come sopra; i BLOB audio NON vengono più caricati qui
+    # (erano MB inutili per ricerca: la UI li recupera on-demand con
+    # get_audio_blob alla selezione, come già fa Esplora). ──
+    au_entries = {}
     for aid, frac in _coverage_search(conn, "audio_segments", ["transcript"], text):
-        key = f"au_{aid}"
-        if key in audio: continue
-        row = c.execute(
-            "SELECT ts, source, transcript, audio_data, audio_format FROM audio_segments WHERE id = ?",
-            (aid,)
-        ).fetchone()
+        au_entries.setdefault(aid, (1.0 if frac >= 1.0 else frac, frac >= 1.0))
+    au_sem = []
+    for aid, score in _semantic_hits(conn, "vec_audio", _load_audio_embeddings,
+                                     q_emb, q_i8, sem_cap, config.AUDIO_MIN_SCORE):
+        if aid not in au_entries:
+            au_sem.append((aid, score))
+    au_rows = _fetch_by_ids(conn, "SELECT id, ts, source, transcript FROM audio_segments",
+                            list(au_entries.keys()) + [a for a, _ in au_sem])
+    audio = []
+    for aid, (score, exact) in au_entries.items():
+        row = au_rows.get(aid)
         if row:
-            audio[key] = {
-                "id": aid, "score": 1.0 if frac >= 1.0 else frac, "ts": row[0],
-                "source": row[1], "transcript": row[2], "audio_data": row[3],
-                "audio_format": row[4] or "f32",
-                "type": "audio", "exact": frac >= 1.0,
+            audio.append({
+                "id": aid, "score": score, "ts": row[0],
+                "source": row[1], "transcript": row[2],
+                "type": "audio", "exact": exact,
                 "app": _MIC_EMOJI + ("Microfono" if row[1] == "mic" else "Sistema"),
-                "text": row[2]
-            }
+                "text": row[2],
+            })
+    for aid, score in au_sem:
+        if len(audio) >= sem_cap:
+            break
+        row = au_rows.get(aid)
+        if not row:
+            continue
+        # Penalità semantica: match solo per significato (la query non appare
+        # nel transcript) → score ridotto, e rifiltrato sulla soglia.
+        if low_text not in (row[2] or "").lower():
+            score *= AUDIO_SEMANTIC_PENALTY
+            if score < config.AUDIO_MIN_SCORE:
+                continue
+        audio.append({
+            "id": aid, "score": score, "ts": row[0],
+            "source": row[1], "transcript": row[2],
+            "type": "audio", "exact": False,
+            "app": _MIC_EMOJI + ("Microfono" if row[1] == "mic" else "Sistema"),
+            "text": row[2],
+        })
 
-    # ── 4. SEMANTIC audio ─────────────────────────────────────────
-    sem_cap_au = max(k * 3, 30)
-    if use_vec:
-        try:
-            q_i8 = quantize_int8(q_emb).tobytes()
-            au_hits = _vec_search(conn, "vec_audio", q_i8, sem_cap_au)
-        except Exception:
-            au_hits = None
-    else:
-        au_hits = None
-
-    if au_hits is not None:
-        for aid, score in au_hits:
-            if len(audio) >= sem_cap_au: break
-            if score < config.AUDIO_MIN_SCORE: continue
-            key = f"au_{aid}"
-            if key in audio: continue
-            row = c.execute(
-                "SELECT ts, source, transcript, audio_data FROM audio_segments WHERE id = ?",
-                (aid,)
-            ).fetchone()
-            if row:
-                if text.lower() not in (row[2] or "").lower():
-                    score *= AUDIO_SEMANTIC_PENALTY
-                if score < config.AUDIO_MIN_SCORE: continue
-                audio[key] = {
-                    "id": aid, "score": score, "ts": row[0],
-                    "source": row[1], "transcript": row[2], "audio_data": row[3],
-                    "type": "audio", "exact": False,
-                    "app": _MIC_EMOJI + ("Microfono" if row[1] == "mic" else "Sistema"),
-                    "text": row[2]
-                }
-    elif q_emb is not None:
-        au_ids, au_mat = _load_audio_embeddings(conn)
-        if au_mat is not None:
-            sims       = au_mat @ q_emb
-            idx_sorted = np.argsort(-sims)
-            for idx in idx_sorted:
-                if len(audio) >= sem_cap_au: break
-                score = float(sims[idx])
-                if score < config.AUDIO_MIN_SCORE: break
-                aid = int(au_ids[idx])
-                key = f"au_{aid}"
-                if key in audio: continue
-                row = c.execute(
-                    "SELECT ts, source, transcript, audio_data FROM audio_segments WHERE id = ?",
-                    (aid,)
-                ).fetchone()
-                if row:
-                    if text.lower() not in (row[2] or "").lower():
-                        score *= AUDIO_SEMANTIC_PENALTY
-                    if score < config.AUDIO_MIN_SCORE: continue
-                    audio[key] = {
-                        "id": aid, "score": score, "ts": row[0],
-                        "source": row[1], "transcript": row[2], "audio_data": row[3],
-                        "type": "audio", "exact": False,
-                        "app": _MIC_EMOJI + ("Microfono" if row[1] == "mic" else "Sistema"),
-                        "text": row[2]
-                    }
-
-    # ── 5. Pagine web (estensione browser) ────────────────────────
-    web = {}
-
-    def _web_row(wid):
-        return c.execute(
-            "SELECT ts, url, domain, title, text FROM web_pages WHERE id=?", (wid,)
-        ).fetchone()
-
-    def _web_dict(wid, row, score, exact):
-        return {
-            "id": wid, "score": score, "ts": row[0], "url": row[1],
-            "domain": row[2] or "", "title": row[3] or "", "text": row[4] or "",
-            "type": "web", "exact": exact, "app": "🌐 " + (row[2] or "web"),
-        }
-
+    # ── PAGINE WEB (estensione browser): testo + semantica (solo vec) ──
+    web_entries = {}
     for wid, frac in _coverage_search(conn, "web_pages", ["text", "title", "url"], text):
-        key = f"web_{wid}"
-        if key in web: continue
-        row = _web_row(wid)
+        web_entries.setdefault(wid, (1.0 if frac >= 1.0 else frac, frac >= 1.0))
+    for wid, score in _semantic_hits(conn, "vec_web", None,
+                                     q_emb, q_i8, sem_cap, MIN_SCORE_SCREENSHOT):
+        if len(web_entries) >= sem_cap:
+            break
+        web_entries.setdefault(wid, (score, False))
+    web_rows = _fetch_by_ids(conn, "SELECT id, ts, url, domain, title, text FROM web_pages",
+                             web_entries.keys())
+    web = []
+    for wid, (score, exact) in web_entries.items():
+        row = web_rows.get(wid)
         if row:
-            web[key] = _web_dict(wid, row, 1.0 if frac >= 1.0 else frac, frac >= 1.0)
-
-    sem_cap_web = max(k * 3, 30)
-    web_hits = None
-    if use_vec:
-        try:
-            q_i8 = quantize_int8(q_emb).tobytes()
-            web_hits = _vec_search(conn, "vec_web", q_i8, sem_cap_web)
-        except Exception:
-            web_hits = None
-    if web_hits is not None:
-        for wid, score in web_hits:
-            if len(web) >= sem_cap_web: break
-            if score < MIN_SCORE_SCREENSHOT: continue
-            key = f"web_{wid}"
-            if key in web: continue
-            row = _web_row(wid)
-            if row:
-                web[key] = _web_dict(wid, row, score, False)
-
-    conn.close()
+            web.append({
+                "id": wid, "score": score, "ts": row[0], "url": row[1],
+                "domain": row[2] or "", "title": row[3] or "", "text": row[4] or "",
+                "type": "web", "exact": exact, "app": "🌐 " + (row[2] or "web"),
+            })
 
     # Sort: exact first, score desc, ts desc (recent first)
     def _sort_key(x):
         return (not x.get("exact", False), -x["score"], -_ts_int(x["ts"]))
-    ss_sorted  = sorted(screenshots.values(), key=_sort_key)[:k]
-    au_sorted  = sorted(audio.values(),       key=_sort_key)[:k]
-    web_sorted = sorted(web.values(),         key=_sort_key)[:k]
-    return ss_sorted + au_sorted + web_sorted
+    return (sorted(screenshots, key=_sort_key)[:k]
+            + sorted(audio, key=_sort_key)[:k]
+            + sorted(web, key=_sort_key)[:k])
+
+
+def query(text: str, top_k: int = None) -> list[dict]:
+    k = top_k if top_k else TOP_K_RESULTS
+    # Embedding per la ricerca semantica. Se il modello (torch) non è disponibile
+    # degradiamo alla sola ricerca testuale invece di crashare.
+    q_emb = None
+    try:
+        q_emb = _encode_queries([text])[text]
+    except Exception as e:
+        print(f"[search] modello non disponibile, solo ricerca testuale: {e}")
+    conn = get_conn()
+    try:
+        return _query_with_emb(conn, text, q_emb, k)
+    finally:
+        conn.close()
+
+
+def query_many(texts: list[str], top_k: int = None) -> list[list[dict]]:
+    """Ricerca di N query in una passata: encode in UN batch (il collo di
+    bottiglia locale) e una sola connessione DB. Usata dalla ricerca agentica.
+    Ritorna una lista di liste, allineata a `texts`."""
+    k = top_k if top_k else TOP_K_RESULTS
+    embs = {}
+    try:
+        embs = _encode_queries(list(dict.fromkeys(texts)))
+    except Exception as e:
+        print(f"[search] modello non disponibile, solo ricerca testuale: {e}")
+    conn = get_conn()
+    try:
+        return [_query_with_emb(conn, t, embs.get(t), k) for t in texts]
+    finally:
+        conn.close()
 
 
 def get_all(limit: int = 3000, offset: int = 0) -> list[dict]:

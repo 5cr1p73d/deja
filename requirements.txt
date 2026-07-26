@@ -25,7 +25,9 @@ jiter==0.15.0
 joblib==1.5.3
 # SECURITY: keyboard 0.13.5 e PyAudioWPatch non sono più mantenuti (ultimo
 # update ~2020/2021). Rischio supply-chain da monitorare; valutare pynput.
-keyboard==0.13.5
+keyboard==0.13.5; sys_platform == 'win32'
+# Linux: hotkey globali via pynput (keyboard richiede root su Linux)
+pynput==1.8.2; sys_platform == 'linux'
 markdown-it-py==4.0.0
 MarkupSafe==3.0.3
 mdurl==0.1.2
@@ -36,17 +38,19 @@ numpy==2.4.2
 onnxruntime==1.24.3
 openai==2.37.0
 packaging==26.0
-pefile==2024.8.26
+pefile==2024.8.26; sys_platform == 'win32'
 pillow==12.2.0
 protobuf==7.34.0
 # System events collector (processi/file/device, no admin)
 psutil==7.2.2
 watchdog==6.0.0
-PyAudioWPatch==0.2.12.8
+PyAudioWPatch==0.2.12.8; sys_platform == 'win32'
+# Linux: PortAudio standard; il loopback sono le sorgenti monitor Pulse/PipeWire
+PyAudio==0.2.14; sys_platform == 'linux'
 pycparser==3.0
 pydantic==2.13.4
 pydantic_core==2.46.4
-PyGetWindow==0.0.9
+PyGetWindow==0.0.9; sys_platform == 'win32'
 Pygments==2.20.0
 pyinstaller==6.19.0
 pyinstaller-hooks-contrib==2026.2
@@ -55,7 +59,7 @@ PyQt6-Qt6==6.10.2
 PyQt6_sip==13.11.0
 PyRect==0.2.0
 pytesseract==0.3.13
-pywin32-ctypes==0.2.3
+pywin32-ctypes==0.2.3; sys_platform == 'win32'
 PyYAML==6.0.3
 regex==2026.2.28
 rich==14.3.3
@@ -79,7 +83,10 @@ transformers==5.3.0
 typer==0.24.1
 typing-inspection==0.4.2
 # App lock: Windows Hello via WinRT (winsdk non ha wheel py3.14 → pacchetti winrt-*)
-winrt-runtime==3.2.1
-winrt-Windows.Foundation==3.2.1
-winrt-Windows.Security.Credentials.UI==3.2.1
+winrt-runtime==3.2.1; sys_platform == 'win32'
+winrt-Windows.Foundation==3.2.1; sys_platform == 'win32'
+winrt-Windows.Security.Credentials.UI==3.2.1; sys_platform == 'win32'
+# Linux: segreti nel portachiavi di sistema (SecretService/KWallet)
+keyring==25.7.0; sys_platform == 'linux'
+SecretStorage==3.4.0; sys_platform == 'linux'
 typing_extensions==4.15.0

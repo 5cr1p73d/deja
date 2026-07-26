@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QLineEdit,
     QListWidget, QListWidgetItem, QStyledItemDelegate, QStyle, QFrame,
     QSlider, QScrollArea, QStackedWidget, QComboBox, QSpinBox, QDateEdit, QCheckBox,
+    QDialog,
 )
 from PyQt6.QtCore import (
     Qt, QSize, QRectF, QPointF, QPoint, QRect, QThread, pyqtSignal, QTimer,
@@ -98,6 +99,629 @@ class TimelineWorker(QThread):
             self.done.emit(search_module.get_all(limit=self._limit, offset=self._offset))
         except Exception:
             self.done.emit([])
+
+
+# ── Stato live (card sidebar + pannello) ───────────────────────────
+def _fmt_bytes(n):
+    if n is None:
+        return "—"
+    for unit, div in (("TB", 1024 ** 4), ("GB", 1024 ** 3), ("MB", 1024 ** 2), ("kB", 1024)):
+        if n >= div:
+            return f"{n / div:.1f} {unit}".replace(".", ",")
+    return f"{int(n)} B"
+
+
+def _fmt_num(n):
+    try:
+        return f"{int(n):,}".replace(",", ".")
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _fmt_ago(ts_iso):
+    """ISO UTC → '12s fa' / '5 min fa' / '2 h fa' / '3 g fa'. '—' se assente."""
+    if not ts_iso:
+        return "—"
+    try:
+        ts = datetime.fromisoformat(ts_iso)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        d = (datetime.now(timezone.utc) - ts).total_seconds()
+    except Exception:
+        return "—"
+    if d < 0:
+        d = 0
+    if d < 10:
+        return "ora"
+    if d < 60:
+        return f"{int(d)}s fa"
+    if d < 3600:
+        return f"{int(d // 60)} min fa"
+    if d < 86400:
+        return f"{int(d // 3600)} h fa"
+    return f"{int(d // 86400)} g fa"
+
+
+def _fmt_left(seconds):
+    """Secondi residui di pausa → testo. Oltre un anno = incognito (pausa 'infinita')."""
+    if seconds > 300 * 86400:
+        return "incognito"
+    if seconds <= 0:
+        return ""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min"
+    return f"{int(seconds // 3600)} h"
+
+
+def collect_status(full=True):
+    """Fotografia dello stato di Déjà: cattura, archivio, spazio, indice, sicurezza.
+
+    **Da chiamare fuori dal thread UI** (`StatusWorker`). Nessuna eccezione esce
+    di qui: ogni pezzo che fallisce resta a None e la UI mostra '—'.
+
+    `full=False` = giro ECONOMICO (~ms): stato cattura, dimensioni su disco,
+    ultimo ricordo, flag sicurezza. Salta i COUNT(*), che su un archivio reale
+    (600k+ righe) costano oltre un secondo: farli a ogni tick significherebbe
+    tenere una connessione SQLCipher sotto sforzo in permanenza, in concorrenza
+    con le scritture del capturer. I totali si aggiornano su cadenza lenta e il
+    chiamante fonde le due fotografie.
+    """
+    import os
+    import shutil
+    import paths
+
+    st = {"ts": _time.time()}
+
+    # ── Disco (nessun accesso DB: sempre disponibile, anche se il DB è occupato) ──
+    try:
+        dbp = paths.db_path()
+        st["db_bytes"] = os.path.getsize(dbp) if os.path.exists(dbp) else 0
+        st["wal_bytes"] = sum(os.path.getsize(dbp + s) for s in ("-wal", "-shm")
+                              if os.path.exists(dbp + s))
+        st["db_path"] = dbp
+    except Exception:
+        st["db_bytes"] = st["wal_bytes"] = None
+    try:
+        st["data_dir"] = paths.data_dir()
+        du = shutil.disk_usage(st["data_dir"])
+        st["disk_free"] = du.free
+        st["disk_total"] = du.total
+    except Exception:
+        st["disk_free"] = st["disk_total"] = None
+
+    # ── Cattura (stato in-process: privacy è lo stesso modulo dei thread) ──
+    try:
+        from modules import privacy
+        from db import get_setting
+        st["cap_screens"] = (get_setting("capture_screenshots_enabled", "1") or "1") == "1"
+        st["cap_audio"] = (get_setting("capture_audio_enabled", "1") or "1") == "1"
+        st["paused"] = privacy.is_paused()
+        st["pause_left"] = max(0.0, privacy.pause_until_ts() - _time.time()) if st["paused"] else 0.0
+    except Exception:
+        st["cap_screens"] = st["cap_audio"] = st["paused"] = None
+        st["pause_left"] = 0.0
+
+    # ── Archivio + indice (una sola connessione) ──
+    try:
+        from db import get_conn, db_encrypted, fts_available, fts_ready
+        conn = get_conn()
+        try:
+            c = conn.cursor()
+
+            def one(sql, default=None):
+                try:
+                    row = c.execute(sql).fetchone()
+                    return row[0] if row else default
+                except Exception:
+                    return default
+
+            # MAX/MIN(ts) usano idx_*_ts: costo trascurabile, stanno nel giro
+            # economico. I COUNT(*) invece scandiscono l'indice per intero.
+            st["last_ss"] = one("SELECT MAX(ts) FROM screenshots")
+            st["last_au"] = one("SELECT MAX(ts) FROM audio_segments")
+            if full:
+                st["n_ss"] = one("SELECT COUNT(*) FROM screenshots", 0)
+                st["n_au"] = one("SELECT COUNT(*) FROM audio_segments", 0)
+                st["n_web"] = one("SELECT COUNT(*) FROM web_pages", 0)
+                st["n_ev"] = one("SELECT COUNT(*) FROM system_events", 0)
+                st["first_ts"] = one("SELECT MIN(ts) FROM screenshots")
+                st["n_ss_emb"] = one("SELECT COUNT(*) FROM screenshot_embeddings", 0)
+                st["n_au_emb"] = one("SELECT COUNT(*) FROM audio_embeddings", 0)
+        finally:
+            conn.close()
+        st["encrypted"] = db_encrypted()
+        st["fts"] = ("pronto" if fts_ready() else
+                     ("in costruzione" if fts_available() else "non disponibile"))
+    except Exception as e:
+        st["db_error"] = str(e)[:120]
+
+    # ── Sicurezza ──
+    try:
+        from modules import secrets as _secrets
+        st["key_backend"] = ("DPAPI (Windows)" if _secrets.dpapi_available()
+                             else ("Portachiavi di sistema" if _secrets.keyring_available()
+                                   else "nessuno (in chiaro)"))
+    except Exception:
+        st["key_backend"] = None
+    try:
+        from modules import applock
+        st["lock_on"] = applock.lock_enabled() and applock.has_usable_method()
+    except Exception:
+        st["lock_on"] = None
+
+    # ── Ritmo di crescita: MB/giorno e giorni residui sul disco ──
+    try:
+        first = st.get("first_ts")
+        if first and st.get("db_bytes"):
+            t0 = datetime.fromisoformat(first)
+            if t0.tzinfo is None:
+                t0 = t0.replace(tzinfo=timezone.utc)
+            days = max(0.5, (datetime.now(timezone.utc) - t0).total_seconds() / 86400.0)
+            st["bytes_day"] = st["db_bytes"] / days
+            st["days_span"] = days
+            if st.get("disk_free") and st["bytes_day"] > 0:
+                st["days_left"] = st["disk_free"] / st["bytes_day"]
+    except Exception:
+        pass
+    return st
+
+
+def status_headline(st):
+    """(testo, colore) dello stato di cattura, dalla fotografia `collect_status`."""
+    if not st:
+        return "Stato sconosciuto", theme.INK_DIM
+    if st.get("paused"):
+        left = _fmt_left(st.get("pause_left", 0))
+        if left == "incognito":
+            return "Incognito", theme.AMBER
+        return (f"In pausa · {left}" if left else "In pausa"), theme.AMBER
+    ss, au = st.get("cap_screens"), st.get("cap_audio")
+    if ss is None:
+        return "Stato sconosciuto", theme.INK_DIM
+    if ss and au:
+        return "Cattura attiva", theme.EMERALD
+    if ss:
+        return "Solo schermate", theme.EMERALD
+    if au:
+        return "Solo audio", theme.AMBER
+    return "Cattura disattivata", theme.INK_DIM
+
+
+class StatusWorker(QThread):
+    """Raccoglie la fotografia di stato fuori dal thread UI (vedi collect_status)."""
+    done = pyqtSignal(dict)
+
+    def __init__(self, full=True, parent=None):
+        super().__init__(parent)
+        self._full = full
+
+    def run(self):
+        try:
+            self.done.emit(collect_status(full=self._full))
+        except Exception as e:
+            self.done.emit({"db_error": str(e)[:120]})
+
+
+class StatusPoller:
+    """Cadenza a due velocità per lo stato: giro economico a ogni tick, giro
+    COMPLETO (i COUNT) solo ogni `full_every` secondi. Fonde le fotografie così
+    i chiamanti vedono sempre un dict completo. Mai due worker in volo."""
+
+    def __init__(self, on_update, full_every=60.0):
+        self._on_update = on_update
+        self._full_every = full_every
+        self._last_full = 0.0
+        self._worker = None
+        self.state = {}
+
+    def busy(self):
+        return self._worker is not None and self._worker.isRunning()
+
+    def tick(self, force_full=False):
+        if self.busy():
+            return   # niente accodamento: il prossimo tick riprova
+        full = force_full or (_time.time() - self._last_full) >= self._full_every
+        if full:
+            self._last_full = _time.time()
+        self._worker = StatusWorker(full=full)
+        self._worker.done.connect(self._merge)
+        self._worker.start()
+
+    def _merge(self, st):
+        self.state.update(st or {})
+        try:
+            self._on_update(self.state)
+        except Exception:
+            pass
+
+
+class StatusDot(QWidget):
+    """Pallino di stato che PULSA quando la cattura è attiva (feedback vivo:
+    fermo = fermo). L'animazione gira solo se acceso, niente timer sprecati."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(9, 9)
+        self._color = QColor(theme.INK_DIM)
+        self._live = False
+        self._phase = 0.0
+        self._t = QTimer(self)
+        self._t.setInterval(90)
+        self._t.timeout.connect(self._step)
+
+    def set_state(self, color, live):
+        self._color = QColor(color)
+        if live != self._live:
+            self._live = live
+            self._t.start() if live else self._t.stop()
+            if not live:
+                self._phase = 0.0
+        self.update()
+
+    def _step(self):
+        self._phase = (self._phase + 0.09) % 1.0
+        self.update()
+
+    def paintEvent(self, _e):
+        import math
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        if self._live:
+            # alone che respira attorno al punto pieno
+            halo = QColor(self._color)
+            halo.setAlphaF(0.16 + 0.16 * (1 + math.cos(self._phase * 2 * math.pi)) / 2)
+            p.setBrush(halo)
+            p.drawEllipse(QRectF(0, 0, 9, 9))
+            p.setBrush(self._color)
+            p.drawEllipse(QRectF(2, 2, 5, 5))
+        else:
+            p.setBrush(self._color)
+            p.drawEllipse(QRectF(2, 2, 5, 5))
+        p.end()
+
+
+class _ClickableRow(QWidget):
+    """Riga cliccabile con hover (usata dal blocco profilo in sidebar)."""
+    clicked = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setObjectName("clickrow")
+        self._style(False)
+
+    def _style(self, hover):
+        bg = "rgba(255,255,255,0.04)" if hover else "transparent"
+        self.setStyleSheet(f"QWidget#clickrow{{background:{bg}; border-radius:10px;}}"
+                           " QWidget#clickrow QLabel{background:transparent;}")
+
+    def enterEvent(self, e):
+        self._style(True); super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._style(False); super().leaveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(e)
+
+
+class StatusCard(QFrame):
+    """Card di stato in fondo alla sidebar. Prima era testo FISSO ('● Cattura
+    attiva' + conteggio della sola pagina caricata); ora mostra dati reali e
+    live, si clicca per aprire il pannello e ha il toggle pausa inline."""
+    clicked = pyqtSignal()
+    toggle_pause = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("statuscard")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._hover = False
+        self._paint_style()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(15, 13, 13, 14)
+        lay.setSpacing(9)
+
+        head = QHBoxLayout(); head.setContentsMargins(0, 0, 0, 0); head.setSpacing(8)
+        self._dot = StatusDot()
+        self._state = QLabel("Lettura stato…")
+        self._state.setStyleSheet(f"color:{theme.INK_DIM}; font-size:12px; font-weight:500;")
+        head.addWidget(self._dot); head.addWidget(self._state); head.addStretch()
+        self._pause_btn = QPushButton()
+        self._pause_btn.setFixedSize(24, 24)
+        self._pause_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pause_btn.setStyleSheet(
+            "QPushButton{border:none; background:transparent; border-radius:7px;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.09);}")
+        self._pause_btn.clicked.connect(self.toggle_pause.emit)
+        head.addWidget(self._pause_btn)
+        lay.addLayout(head)
+
+        self._rows = {}
+        for key, label in (("archive", "Archivio"), ("disk", "Spazio"), ("last", "Ultima")):
+            r = QHBoxLayout(); r.setContentsMargins(0, 0, 0, 0)
+            k = QLabel(label); k.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11.5px;")
+            v = QLabel("—"); v.setFont(QFont(theme.MONO, 9))
+            v.setStyleSheet(f"color:{theme.INK_SOFT};")
+            r.addWidget(k); r.addStretch(); r.addWidget(v)
+            self._rows[key] = v
+            lay.addLayout(r)
+        self._sync_pause_icon(False)
+
+    def _paint_style(self):
+        bg = "rgba(255,255,255,0.045)" if self._hover else "transparent"
+        border = theme.LINE_STRONG if self._hover else theme.LINE
+        self.setStyleSheet(
+            f"QFrame#statuscard{{border:1px solid {border}; border-radius:12px; background:{bg};}}"
+            " QFrame#statuscard QLabel{border:none; background:transparent;}")
+
+    def enterEvent(self, e):
+        self._hover = True; self._paint_style(); super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover = False; self._paint_style(); super().leaveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(e)
+
+    def _sync_pause_icon(self, paused):
+        key, col = ("play", theme.AMBER) if paused else ("pause", theme.INK_DIM)
+        self._pause_btn.setIcon(QIcon(_svg_pixmap(key, col, 13, sw=1.6)))
+        self._pause_btn.setIconSize(QSize(13, 13))
+        self._pause_btn.setToolTip("Riprendi la cattura" if paused else "Metti in pausa 15 minuti")
+
+    def apply(self, st):
+        """Aggiorna la card dalla fotografia di `collect_status`."""
+        text, color = status_headline(st)
+        live = bool(st.get("cap_screens") or st.get("cap_audio")) and not st.get("paused")
+        self._dot.set_state(color, live)
+        self._state.setText(text)
+        self._state.setStyleSheet(f"color:{color}; font-size:12px; font-weight:500;")
+        self._sync_pause_icon(bool(st.get("paused")))
+
+        n = sum(st.get(k) or 0 for k in ("n_ss", "n_au", "n_web", "n_ev"))
+        self._rows["archive"].setText(f"{_fmt_num(n)} ricordi" if n else "vuoto")
+        db = st.get("db_bytes")
+        self._rows["disk"].setText(_fmt_bytes((db or 0) + (st.get("wal_bytes") or 0))
+                                   if db is not None else "—")
+        last = max([t for t in (st.get("last_ss"), st.get("last_au")) if t], default=None)
+        self._rows["last"].setText(_fmt_ago(last))
+        self.setToolTip("Clic per i dettagli dello stato")
+
+
+class StatusPanel(QDialog):
+    """Pannello 'Stato di Déjà': tutto in tempo reale (si aggiorna da solo finché
+    è aperto) più le azioni rapide. Aperto dalla card in sidebar."""
+
+    def __init__(self, parent, on_pause, on_resume):
+        super().__init__(parent)
+        self._on_pause, self._on_resume = on_pause, on_resume
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFixedWidth(392)
+        self._drag = None
+        self._st = {}
+
+        outer = QVBoxLayout(self); outer.setContentsMargins(16, 16, 16, 16); outer.setSpacing(0)
+        card = QFrame(); card.setObjectName("stcard")
+        card.setStyleSheet(
+            f"QFrame#stcard{{background:{theme.SURFACE}; border:1px solid {theme.LINE_STRONG};"
+            " border-radius:16px;} QFrame#stcard QLabel{background:transparent;}")
+        outer.addWidget(card)
+        try:
+            from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+            eff = QGraphicsDropShadowEffect(self)
+            eff.setBlurRadius(46); eff.setColor(QColor(0, 0, 0, 170)); eff.setOffset(0, 10)
+            card.setGraphicsEffect(eff)
+        except Exception:
+            pass
+
+        cl = QVBoxLayout(card); cl.setContentsMargins(20, 16, 20, 18); cl.setSpacing(0)
+        head = QHBoxLayout(); head.setContentsMargins(0, 0, 0, 4); head.setSpacing(9)
+        self._dot = StatusDot()
+        self._head_lbl = QLabel("Stato di Déjà")
+        self._head_lbl.setFont(QFont(theme.SANS, 13, QFont.Weight.DemiBold))
+        self._head_lbl.setStyleSheet(f"color:{theme.INK};")
+        head.addWidget(self._dot); head.addWidget(self._head_lbl); head.addStretch()
+        close = QPushButton("✕"); close.setFixedSize(26, 26)
+        close.setCursor(Qt.CursorShape.PointingHandCursor)
+        close.setStyleSheet(f"QPushButton{{border:none; background:transparent; color:{theme.INK_DIM};"
+                            " font-size:13px; border-radius:8px;}"
+                            "QPushButton:hover{background:rgba(255,255,255,0.09); color:#fff;}")
+        close.clicked.connect(self.reject)
+        head.addWidget(close)
+        cl.addLayout(head)
+
+        self._sub = QLabel("—")
+        self._sub.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11.5px;")
+        self._sub.setContentsMargins(18, 0, 0, 10)
+        cl.addWidget(self._sub)
+
+        self._val = {}
+        for section, rows in (
+            ("Cattura", (("cap_screens", "Schermate"), ("cap_audio", "Audio"),
+                         ("last_ss", "Ultima schermata"), ("last_au", "Ultimo audio"))),
+            ("Archivio", (("n_ss", "Schermate"), ("n_au", "Segmenti audio"),
+                          ("n_web", "Pagine web"), ("n_ev", "Eventi"),
+                          ("span", "Copre"))),
+            ("Spazio", (("db", "Database"), ("wal", "Journal (WAL)"),
+                        ("rate", "Crescita"), ("free", "Libero sul disco"),
+                        ("left", "Autonomia stimata"))),
+            ("Indice e sicurezza", (("index", "Indicizzazione"), ("fts", "Ricerca testuale"),
+                                    ("enc", "Database"), ("key", "Chiave"),
+                                    ("lock", "Blocco app"))),
+        ):
+            s = QLabel(section.upper())
+            f = QFont(theme.MONO, 8); f.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 116)
+            s.setFont(f); s.setContentsMargins(0, 14, 0, 5)
+            s.setStyleSheet(f"color:{theme.INK_FAINT};")
+            cl.addWidget(s)
+            for key, label in rows:
+                r = QHBoxLayout(); r.setContentsMargins(0, 0, 0, 0); r.setSpacing(12)
+                k = QLabel(label); k.setStyleSheet(f"color:{theme.INK_DIM}; font-size:12px;")
+                v = QLabel("—"); v.setFont(QFont(theme.MONO, 9))
+                v.setStyleSheet(f"color:{theme.INK_SOFT};")
+                v.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                r.addWidget(k); r.addStretch(); r.addWidget(v)
+                self._val[key] = v
+                cl.addLayout(r)
+
+        acts = QHBoxLayout(); acts.setContentsMargins(0, 18, 0, 0); acts.setSpacing(8)
+        self._b_pause = self._btn("Pausa 15 min", self._pause_clicked, primary=True)
+        acts.addWidget(self._b_pause)
+        acts.addWidget(self._btn("Apri cartella dati", self._open_folder))
+        acts.addStretch()
+        cl.addLayout(acts)
+
+        # Auto-refresh finché il pannello è aperto: tick da 2s (i numeri devono
+        # muoversi sotto gli occhi) ma i COUNT solo ogni 20s — vedi StatusPoller.
+        self._poller = StatusPoller(self.apply, full_every=20.0)
+        self._timer = QTimer(self)
+        self._timer.setInterval(2000)
+        self._timer.timeout.connect(self._poller.tick)
+        self._timer.start()
+        self._poller.tick(force_full=True)
+
+    @staticmethod
+    def _btn(text, slot, primary=False):
+        b = QPushButton(text); b.setFixedHeight(31)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        if primary:
+            b.setStyleSheet(
+                f"QPushButton{{background:rgba(167,139,250,0.14); color:{theme.VIOLET};"
+                f" border:1px solid rgba(167,139,250,0.28); border-radius:9px;"
+                " padding:0 14px; font-size:12px; font-weight:600;}"
+                "QPushButton:hover{background:rgba(167,139,250,0.22);}")
+        else:
+            b.setStyleSheet(
+                f"QPushButton{{background:rgba(255,255,255,0.05); color:{theme.INK_SOFT};"
+                f" border:1px solid {theme.LINE}; border-radius:9px;"
+                " padding:0 14px; font-size:12px; font-weight:500;}"
+                "QPushButton:hover{background:rgba(255,255,255,0.10); color:#fff;}")
+        b.clicked.connect(slot)
+        return b
+
+    # ── Dati ────────────────────────────────────────────────────────
+    def refresh(self, force_full=False):
+        self._poller.tick(force_full=force_full)
+
+    def apply(self, st):
+        self._st = st
+        text, color = status_headline(st)
+        self._head_lbl.setText(text)
+        self._head_lbl.setStyleSheet(f"color:{color};")
+        self._dot.set_state(color, bool(st.get("cap_screens") or st.get("cap_audio"))
+                            and not st.get("paused"))
+        paused = bool(st.get("paused"))
+        self._b_pause.setText("Riprendi" if paused else "Pausa 15 min")
+
+        def on_off(v):
+            return "attiva" if v else ("—" if v is None else "spenta")
+
+        self._sub.setText(st.get("db_path") or st.get("data_dir") or "")
+        self._val["cap_screens"].setText(on_off(st.get("cap_screens")))
+        self._val["cap_audio"].setText(on_off(st.get("cap_audio")))
+        self._val["last_ss"].setText(_fmt_ago(st.get("last_ss")))
+        self._val["last_au"].setText(_fmt_ago(st.get("last_au")))
+        for k in ("n_ss", "n_au", "n_web", "n_ev"):
+            self._val[k].setText(_fmt_num(st.get(k)))
+        days = st.get("days_span")
+        self._val["span"].setText(f"{int(days)} giorni" if days else "—")
+
+        self._val["db"].setText(_fmt_bytes(st.get("db_bytes")))
+        self._val["wal"].setText(_fmt_bytes(st.get("wal_bytes")))
+        rate = st.get("bytes_day")
+        self._val["rate"].setText(f"{_fmt_bytes(rate)}/giorno" if rate else "—")
+        self._val["free"].setText(_fmt_bytes(st.get("disk_free")))
+        left = st.get("days_left")
+        if left is None:
+            self._val["left"].setText("—")
+        elif left > 3650:
+            self._val["left"].setText("oltre 10 anni")
+        else:
+            self._val["left"].setText(f"~{int(left)} giorni")
+        self._val["left"].setStyleSheet(
+            f"color:{theme.AMBER if (left is not None and left < 30) else theme.INK_SOFT};")
+
+        # Indicizzazione: quanto dell'archivio ha già l'embedding semantico.
+        n_items = (st.get("n_ss") or 0) + (st.get("n_au") or 0)
+        n_emb = (st.get("n_ss_emb") or 0) + (st.get("n_au_emb") or 0)
+        if not n_items:
+            self._val["index"].setText("—")
+        elif n_emb >= n_items:
+            self._val["index"].setText("completa")
+        else:
+            self._val["index"].setText(f"{n_emb * 100 // n_items}% · {_fmt_num(n_items - n_emb)} in coda")
+        self._val["fts"].setText(st.get("fts") or "—")
+        enc = st.get("encrypted")
+        self._val["enc"].setText("cifrato (SQLCipher)" if enc else
+                                 ("—" if enc is None else "IN CHIARO"))
+        self._val["enc"].setStyleSheet(f"color:{theme.INK_SOFT if enc else theme.AMBER};")
+        self._val["key"].setText(st.get("key_backend") or "—")
+        lock = st.get("lock_on")
+        self._val["lock"].setText("attivo" if lock else ("—" if lock is None else "disattivato"))
+
+    # ── Azioni ──────────────────────────────────────────────────────
+    def _pause_clicked(self):
+        if getattr(self, "_st", {}).get("paused"):
+            self._on_resume()
+        else:
+            self._on_pause()
+        self.refresh()
+
+    def _open_folder(self):
+        import os
+        import subprocess
+        import sys as _sys
+        d = getattr(self, "_st", {}).get("data_dir")
+        if not d:
+            return
+        try:
+            if _sys.platform == "win32":
+                os.startfile(d)  # noqa: S606 — apre Esplora risorse sulla cartella dati
+            elif _sys.platform == "darwin":
+                subprocess.Popen(["open", d])
+            else:
+                subprocess.Popen(["xdg-open", d])
+        except Exception:
+            pass
+
+    # ── Frameless: trascinamento + stop timer ───────────────────────
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._drag = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            e.accept(); return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._drag is not None and (e.buttons() & Qt.MouseButton.LeftButton):
+            self.move(e.globalPosition().toPoint() - self._drag); e.accept(); return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        self._drag = None
+        super().mouseReleaseEvent(e)
+
+    def resume(self):
+        """Riavvia l'auto-refresh (il pannello viene riusato, non ricreato)."""
+        if not self._timer.isActive():
+            self._timer.start()
+        self._poller.tick(force_full=True)
+
+    def closeEvent(self, e):
+        self._timer.stop()   # chiuso = zero query: nessun polling a vuoto
+        super().closeEvent(e)
+
+    def reject(self):
+        self._timer.stop()
+        super().reject()
 
 
 class TimelineDelegate(QStyledItemDelegate):
@@ -247,6 +871,10 @@ ICONS = {
     "winmax": '<rect x="5.5" y="5.5" width="13" height="13" rx="1.5"/>',
     "winrestore": '<rect x="5.5" y="8.5" width="10" height="10" rx="1.5"/><path d="M8.5 8.5V6A1.5 1.5 0 0 1 10 4.5h8A1.5 1.5 0 0 1 19.5 6v8A1.5 1.5 0 0 1 18 15.5h-2.5"/>',
     "winclose": '<path d="M6 6l12 12M18 6L6 18"/>',
+    # stato / cattura
+    "pause": '<rect x="8" y="6" width="3" height="12" rx="1"/><rect x="14" y="6" width="3" height="12" rx="1"/>',
+    "play": '<path d="M8 5.5l10 6.5-10 6.5z"/>',
+    "disk": '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
 }
 
 
@@ -717,37 +1345,33 @@ class AppShell(QWidget):
         sl.addWidget(b_set); sl.addWidget(b_info)
         sl.addStretch()
 
-        # Stato cattura + archivio (card)
-        status = QFrame(); status.setObjectName("statuscard")
-        status.setStyleSheet(f"QFrame#statuscard{{border:1px solid {theme.LINE}; border-radius:12px;}}"
-                             " QLabel{border:none; background:transparent;}")
-        stl = QVBoxLayout(status); stl.setContentsMargins(15, 14, 15, 15); stl.setSpacing(11)
-        cap = QLabel("●  Cattura attiva"); cap.setStyleSheet(f"color:{theme.EMERALD}; font-size:12px; font-weight:500;")
-        stl.addWidget(cap)
-        arc_row = QHBoxLayout(); arc_row.setContentsMargins(0, 0, 0, 0)
-        arc_k = QLabel("Archivio"); arc_k.setStyleSheet(f"color:{theme.INK_DIM}; font-size:12px;")
-        self._archive_lbl = QLabel("—")
-        af = QFont(theme.MONO, 9); self._archive_lbl.setFont(af)
-        self._archive_lbl.setStyleSheet(f"color:{theme.INK_SOFT};")
-        arc_row.addWidget(arc_k); arc_row.addStretch(); arc_row.addWidget(self._archive_lbl)
-        stl.addLayout(arc_row)
-        sl.addWidget(status)
+        # Stato cattura + archivio: card VIVA (dati reali dal DB/disco, clic →
+        # pannello dettagliato, toggle pausa inline). Vedi StatusCard.
+        self._status_card = StatusCard()
+        self._status_card.clicked.connect(self._open_status_panel)
+        self._status_card.toggle_pause.connect(self._toggle_pause)
+        sl.addWidget(self._status_card)
 
-        # Profilo
+        # Profilo — anche questo cliccabile: apre lo stesso pannello, e la riga
+        # 'locale · cifrato' riflette lo STATO REALE della cifratura (prima era
+        # una stringa fissa: mentiva se SQLCipher/DPAPI non erano disponibili).
         import getpass
         try:
             username = getpass.getuser() or "Utente"
         except Exception:
             username = "Utente"
-        prof = QWidget(); prl = QHBoxLayout(prof); prl.setContentsMargins(8, 20, 8, 2); prl.setSpacing(11)
+        prof = _ClickableRow()
+        prl = QHBoxLayout(prof); prl.setContentsMargins(8, 16, 8, 2); prl.setSpacing(11)
         av = QLabel(username[:1].upper()); av.setFixedSize(34, 34); av.setAlignment(Qt.AlignmentFlag.AlignCenter)
         av.setStyleSheet(f"background:#22222b; border:1px solid {theme.LINE}; border-radius:9px;"
                          f" color:{theme.INK_SOFT}; font-size:14px; font-weight:600;")
         pcol = QVBoxLayout(); pcol.setSpacing(1)
         pn = QLabel(username); pn.setStyleSheet(f"color:{theme.INK}; font-size:13px; font-weight:600;")
-        ph = QLabel("locale · cifrato"); ph.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11px;")
-        pcol.addWidget(pn); pcol.addWidget(ph)
+        self._profile_sub = QLabel("locale")
+        self._profile_sub.setStyleSheet(f"color:{theme.INK_DIM}; font-size:11px; background:transparent;")
+        pcol.addWidget(pn); pcol.addWidget(self._profile_sub)
         prl.addWidget(av); prl.addLayout(pcol); prl.addStretch()
+        prof.clicked.connect(self._open_status_panel)
         sl.addWidget(prof)
         root.addWidget(side)
 
@@ -782,6 +1406,15 @@ class AppShell(QWidget):
         self._refresh_timer.setInterval(4000)
         self._refresh_timer.timeout.connect(self._maybe_refresh)
         self._refresh_timer.start()
+
+        # Stato live della sidebar: raccolta SEMPRE su thread separato e a due
+        # velocità (economico ogni 4s, totali ogni 60s) — vedi StatusPoller.
+        self._status = StatusPoller(self._on_status, full_every=60.0)
+        self._status_timer = QTimer(self)
+        self._status_timer.setInterval(4000)
+        self._status_timer.timeout.connect(self._refresh_status)
+        self._status_timer.start()
+        QTimer.singleShot(300, lambda: self._refresh_status(force_full=True))
 
     # ── Pagina Timeline ─────────────────────────────────────────────
     def _build_timeline_page(self):
@@ -1302,8 +1935,10 @@ class AppShell(QWidget):
         self.chat_page = ChatPage(header_right_pad=132)
         self.chat_page.send_clicked.connect(self._send_chat_message)
         self.chat_page.new_chat_btn.clicked.connect(self._reset_chat)
+        self.chat_page.stop_btn.clicked.connect(self._stop_chat)
         self._chat_history = []
         self._chat_worker = None
+        self._chat_activity = None
         self._chat_thinking = None
         self._chat_current_bubble = None
         self._chat_current_container = None
@@ -2347,6 +2982,7 @@ class AppShell(QWidget):
         self._chat_thinking = lbl
         self._chat_current_bubble = None; self._chat_current_text = ""
         self._chat_turn_bubbles = []
+        self._chat_activity = None   # riquadro attività del turno (lazy)
         self.chat_page.set_busy(True)
         try: ai_assistant.save_chat_message("user", ai_text)
         except Exception as e: print(f"[Chat] save user fail: {e}")
@@ -2385,9 +3021,31 @@ class AppShell(QWidget):
             pass
         self._chat_thinking = None
 
+    def _close_activity(self, failed=False, note=""):
+        """Collassa il riquadro attività del turno in una riga di riepilogo."""
+        act = getattr(self, "_chat_activity", None)
+        if act is None:
+            return
+        try:
+            act.fail(note or "interrotto") if failed else act.finish(note)
+        except Exception:
+            pass
+        self._chat_activity = None
+
+    def _stop_chat(self):
+        """Ferma la risposta in corso (bottone Stop)."""
+        w = self._chat_worker
+        if w is None or not w.isRunning():
+            return
+        w.cancel()
+        self._remove_thinking()
+        self._close_activity(failed=True, note="fermato")
+        self.chat_page.set_busy(False)
+
     def _on_chat_chunk(self, kind, content):
         if kind == "text":
             self._remove_thinking()
+            self._close_activity()
             if self._chat_current_bubble is None:
                 container, lbl = self.chat_page.add_assistant("")
                 self._chat_current_bubble = lbl; self._chat_current_container = container
@@ -2398,6 +3056,8 @@ class AppShell(QWidget):
             if self._chat_turn_bubbles:
                 self._chat_turn_bubbles[-1]["text"] = self._chat_current_text
         elif kind == "tool":
+            # Tutti i passi del turno finiscono in UN riquadro vivo, non in N
+            # chip permanenti (in agentica erano 10-15 righe che restavano lì).
             self._remove_thinking()
             if self._chat_current_container is not None and self._chat_current_text:
                 self._finalize_bubble(self._chat_current_container, self._chat_current_bubble, self._chat_current_text)
@@ -2406,14 +3066,19 @@ class AppShell(QWidget):
                 if self._chat_turn_bubbles:
                     self._chat_turn_bubbles[-1]["finalized"] = True
             self._chat_current_bubble = None; self._chat_current_container = None; self._chat_current_text = ""
-            self.chat_page.add_tool(content)
-            _, lbl = self.chat_page.add_thinking(); self._chat_thinking = lbl
+            if getattr(self, "_chat_activity", None) is None:
+                self._chat_activity = self.chat_page.add_activity()
+            self._chat_activity.add_step(content)
         elif kind == "error":
-            self._remove_thinking(); self.chat_page.add_error(content)
+            self._remove_thinking()
+            self._close_activity(failed=True)
+            self.chat_page.add_error(content)
             self._chat_current_bubble = None; self._chat_current_container = None; self._chat_current_text = ""
 
     def _on_chat_done(self, user_msg):
         self._remove_thinking()
+        cancelled = bool(self._chat_worker is not None and self._chat_worker.cancelled())
+        self._close_activity(failed=cancelled, note="fermato" if cancelled else "")
         for b in self._chat_turn_bubbles:
             if b["text"] and not b.get("finalized"):
                 self._finalize_bubble(b["container"], b["label"], b["text"])
@@ -2544,6 +3209,69 @@ class AppShell(QWidget):
         except Exception as e:
             print(f"[Chat] embed audio play fail: {e}")
 
+    # ── Stato live (sidebar + pannello) ─────────────────────────────
+    def _refresh_status(self, force_full=False):
+        """Aggiorna la StatusCard. A finestra nascosta si ferma: l'app vive nel
+        tray per ore e non ha senso interrogare il DB per una UI invisibile."""
+        if not self.isVisible():
+            return
+        self._status.tick(force_full=force_full)
+
+    def _on_status(self, st):
+        try:
+            self._status_card.apply(st)
+            enc = st.get("encrypted")
+            self._profile_sub.setText("locale · cifrato" if enc else
+                                      ("locale" if enc is None else "locale · NON cifrato"))
+            self._profile_sub.setStyleSheet(
+                f"color:{theme.INK_DIM if enc is not False else theme.AMBER};"
+                " font-size:11px; background:transparent;")
+        except Exception:
+            pass
+
+    def _toggle_pause(self):
+        """Toggle rapido dalla card: pausa 15 min ↔ riprendi. Stessa semantica
+        del menu tray (`privacy.pause_for` / `unpause`), stato condiviso."""
+        try:
+            from modules import privacy
+            if privacy.is_paused():
+                privacy.unpause()
+                self.toast("Cattura ripresa.", level="ok")
+            else:
+                privacy.pause_for(15 * 60)
+                self.toast("Cattura in pausa per 15 minuti.", level="info")
+        except Exception as e:
+            self.toast(f"Pausa non riuscita: {e}", level="error")
+            return
+        self._refresh_status()
+        dlg = getattr(self, "_status_dlg", None)
+        if dlg is not None and dlg.isVisible():
+            dlg.refresh()
+
+    def _open_status_panel(self):
+        """Pannello di stato dettagliato. Riusa quello già aperto (niente copie)."""
+        dlg = getattr(self, "_status_dlg", None)
+        if dlg is not None:
+            # Riapertura: stesso pannello (niente copie), timer ripreso.
+            dlg.show(); dlg.resume(); dlg.raise_(); dlg.activateWindow(); return
+        try:
+            from modules import privacy
+            dlg = StatusPanel(self,
+                              on_pause=lambda: (privacy.pause_for(15 * 60), self._refresh_status()),
+                              on_resume=lambda: (privacy.unpause(), self._refresh_status()))
+        except Exception as e:
+            self.toast(f"Stato non disponibile: {e}", level="error")
+            return
+        self._status_dlg = dlg
+        # Ancorato al bordo della sidebar, accanto alla card che l'ha aperto.
+        try:
+            g = self._status_card.mapToGlobal(QPoint(self._status_card.width(), 0))
+            dlg.adjustSize()
+            dlg.move(g.x() + 6, max(40, g.y() - dlg.height() + self._status_card.height()))
+        except Exception:
+            pass
+        dlg.show()
+
     # ── Caricamento dati reali ──────────────────────────────────────
     def _load(self):
         """Avvia il caricamento della cronologia in background (no freeze UI)."""
@@ -2603,8 +3331,8 @@ class AppShell(QWidget):
             f"Cronologia   ·   {n:,} ricord{'o' if n == 1 else 'i'}".replace(",", ".")
             if n else "Nessun ricordo ancora"
         )
-        n_shot = sum(1 for r in self._records if r.get("type") == "screenshot")
-        self._archive_lbl.setText(f"{n_shot:,} schermate".replace(",", "."))
+        # (il conteggio archivio della sidebar non si legge più da qui: la
+        # StatusCard mostra i TOTALI reali del DB, non la sola pagina caricata)
         # Audio in riproduzione: NON rubare la selezione (cambiarla ripopola il
         # detail → _stop_audio → audio interrotto). Lascia tutto com'è.
         if getattr(self, "_is_playing", False) or getattr(self, "_chat_audio_playing", None):

@@ -1,10 +1,16 @@
 # modules/capturer.py
-import time, hashlib, io, logging
+import sys
+import time, hashlib, io, logging, subprocess
 from datetime import datetime, timezone
 import mss
 from PIL import Image
 import pytesseract
-import pygetwindow as gw
+# pygetwindow è di fatto solo-Windows: su Linux la finestra attiva si prende
+# via xdotool (X11). Import condizionale così il modulo carica ovunque.
+if sys.platform == "win32":
+    import pygetwindow as gw
+else:
+    gw = None
 from db import get_conn, get_setting
 from modules import privacy
 from modules import web_bridge
@@ -34,18 +40,45 @@ def _last_hash(conn):
     row = conn.cursor().execute("SELECT hash FROM screenshots ORDER BY id DESC LIMIT 1").fetchone()
     return row[0] if row else None
 
-def _get_active_app():
+def _xdotool(*args):
+    """xdotool con timeout corto. Ritorna stdout strip o None."""
     try:
-        win = gw.getActiveWindow()
-        return win.title if win else "Sconosciuta"
-    except: return "Sconosciuta"
+        r = subprocess.run(["xdotool", *args], capture_output=True, text=True, timeout=2)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _get_active_app():
+    if gw is not None:
+        try:
+            win = gw.getActiveWindow()
+            return win.title if win else "Sconosciuta"
+        except: return "Sconosciuta"
+    # Linux/X11: titolo della finestra attiva via xdotool (se assente → ignoto).
+    title = _xdotool("getactivewindow", "getwindowname")
+    return title or "Sconosciuta"
 
 def _get_active_monitor(sct):
     try:
-        win = gw.getActiveWindow()
-        if not win: return sct.monitors[1]
-        win_cx = win.left + win.width // 2
-        win_cy = win.top + win.height // 2
+        if gw is not None:
+            win = gw.getActiveWindow()
+            if not win: return sct.monitors[1]
+            win_cx = win.left + win.width // 2
+            win_cy = win.top + win.height // 2
+        else:
+            # Linux/X11: geometria finestra attiva da xdotool.
+            geo = _xdotool("getactivewindow", "getwindowgeometry", "--shell")
+            if not geo: return sct.monitors[1]
+            vals = {}
+            for line in geo.splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    vals[k.strip()] = v.strip()
+            win_cx = int(vals.get("X", 0)) + int(vals.get("WIDTH", 0)) // 2
+            win_cy = int(vals.get("Y", 0)) + int(vals.get("HEIGHT", 0)) // 2
         for m in sct.monitors[1:]:
             if m["left"] <= win_cx <= m["left"]+m["width"] and m["top"] <= win_cy <= m["top"]+m["height"]:
                 return m

@@ -1,6 +1,15 @@
 # ui/settings.py
 import sys
-import pyaudiowpatch as pyaudio
+# Stesso shim di modules/audio.py: pyaudiowpatch (win) → pyaudio (linux) → None.
+try:
+    import pyaudiowpatch as pyaudio
+    _HAS_WPATCH = True
+except ImportError:
+    _HAS_WPATCH = False
+    try:
+        import pyaudio
+    except ImportError:
+        pyaudio = None
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QFrame
 )
@@ -16,18 +25,26 @@ OCR_PRESETS = ["ita+eng", "eng", "ita", "spa+eng", "fra+eng", "deu+eng", "por+en
 # seconda istanza PyAudio mentre il thread audio ha uno stream loopback attivo.
 # In un sottoprocesso pulito l'enumerazione riesce; se abortisce, muore solo il
 # figlio e il padre ottiene una lista vuota invece di crashare.
+# Dual-backend: pyaudiowpatch su Windows, pyaudio+monitor su Linux.
 _ENUM_SRC = (
     "import json,sys\n"
+    "out=[]\n"
     "try:\n"
-    " import pyaudiowpatch as pa\n"
-    " p=pa.PyAudio(); out=[]\n"
+    " try:\n"
+    "  import pyaudiowpatch as pa; wp=True\n"
+    " except ImportError:\n"
+    "  import pyaudio as pa; wp=False\n"
+    " def mon(n): n=(n or '').lower(); return '.monitor' in n or 'monitor of' in n\n"
+    " p=pa.PyAudio()\n"
     " for i in range(p.get_device_count()):\n"
     "  d=p.get_device_info_by_index(i)\n"
     "  if d['maxInputChannels']>0 and not d.get('isLoopbackDevice',False):\n"
-    "   out.append(['mic',d['index'],d['name']])\n"
-    " try:\n"
-    "  for d in p.get_loopback_device_info_generator(): out.append(['loopback',d['index'],d['name']])\n"
-    " except Exception: pass\n"
+    "   if not wp and mon(d['name']): out.append(['loopback',d['index'],d['name']])\n"
+    "   else: out.append(['mic',d['index'],d['name']])\n"
+    " if wp:\n"
+    "  try:\n"
+    "   for d in p.get_loopback_device_info_generator(): out.append(['loopback',d['index'],d['name']])\n"
+    "  except Exception: pass\n"
     " p.terminate(); sys.stdout.write(json.dumps(out))\n"
     "except Exception: sys.stdout.write('[]')\n"
 )
@@ -36,13 +53,17 @@ _DEVICES_CACHE = None
 
 
 def _enum_inprocess():
+    if pyaudio is None:
+        return []
+    from modules.audio import _iter_loopback_devices, _is_monitor_name
     pa = pyaudio.PyAudio(); devices = []
     for i in range(pa.get_device_count()):
         dev = pa.get_device_info_by_index(i)
-        if dev["maxInputChannels"] > 0 and not dev.get("isLoopbackDevice", False):
+        if (dev["maxInputChannels"] > 0 and not dev.get("isLoopbackDevice", False)
+                and not (not _HAS_WPATCH and _is_monitor_name(dev.get("name")))):
             devices.append(("mic", dev["index"], dev["name"]))
     try:
-        for dev in pa.get_loopback_device_info_generator():
+        for dev in _iter_loopback_devices(pa):
             devices.append(("loopback", dev["index"], dev["name"]))
     except Exception:
         pass

@@ -53,7 +53,8 @@ except Exception as e:  # OSError/WinError 1114, ImportError, ecc.
     )
 
 from PyQt6.QtWidgets import QApplication
-from db import init_db, load_settings_into_config, vacuum_db, ensure_encrypted
+from db import (init_db, load_settings_into_config, ensure_encrypted,
+                shutdown_db, stop_fts_backfill)
 from modules import capturer, indexer, audio
 from ui.window import open_ask_screen_dialog
 from ui.app_shell import AppShell
@@ -83,7 +84,7 @@ def _show_torch_degraded_dialog():
 
 def _relaunch():
     """Riavvia l'app (stesso eseguibile). Usato dopo il cambio lingua.
-    Chiamato solo dopo lo shutdown pulito (thread fermati, DB compattato)."""
+    Chiamato solo dopo lo shutdown pulito (thread fermati, WAL checkpointato)."""
     import subprocess
     try:
         if getattr(sys, "frozen", False):
@@ -146,9 +147,19 @@ def main():
         from PyQt6.QtCore import QSharedMemory
         _single = QSharedMemory("Deja_SingleInstance_v1")
         if _single.attach():
-            logging.getLogger("deja").info("Istanza già attiva: esco.")
-            return
-        _single.create(1)
+            if sys.platform == "win32":
+                logging.getLogger("deja").info("Istanza già attiva: esco.")
+                return
+            # Unix: un crash lascia il segmento orfano (non viene ripulito dal
+            # kernel come su Windows). attach+detach lo distrugge se nessun
+            # altro processo lo tiene; se create() poi fallisce, l'istanza è
+            # davvero viva.
+            _single.detach()
+            if not _single.create(1):
+                logging.getLogger("deja").info("Istanza già attiva: esco.")
+                return
+        else:
+            _single.create(1)
         app._single_instance = _single  # mantieni vivo per tutta la durata
     except Exception:
         logging.getLogger("deja").exception("single-instance check fallito (proseguo)")
@@ -275,17 +286,28 @@ def main():
     else:
         print("[INFO] Modalità ridotta: indexer e trascrizione audio disattivati (torch non disponibile).")
     exit_code = app.exec()
-    # Togli subito l'icona dal tray: lo shutdown (join thread + VACUUM) può
-    # richiedere qualche secondo e l'utente non deve vedere un'icona "morta".
+    # Togli subito l'icona dal tray: lo shutdown può richiedere 1-2 secondi
+    # e l'utente non deve vedere un'icona "morta".
     try:
         tray.hide()
         app.processEvents()
     except Exception:
         pass
     stop_event.set()
+    # Ferma il backfill FTS (se in corso) PRIMA del checkpoint: esce al confine
+    # del batch (~ms) e riprende al prossimo avvio, niente contesa sul lock.
+    stop_fts_backfill(3.0)
+    # Join con DEADLINE GLOBALE (~6s totali), non 5s CIASCUNO: i thread sono
+    # daemon, chi non risponde in tempo viene abbandonato (SQLite in WAL regge
+    # l'interruzione; al peggio si perde il chunk in corso).
+    import time as _time
+    _deadline = _time.time() + 6.0
     for t in threads:
-        t.join(timeout=5)
-    vacuum_db()
+        t.join(timeout=max(0.2, _deadline - _time.time()))
+    # Manutenzione rapida (checkpoint WAL + optimize). Il VECCHIO vacuum_db()
+    # riscriveva l'INTERO file a ogni chiusura: su un DB da decine di GB erano
+    # minuti di attesa per recuperare ~0 byte (qui non si cancella quasi nulla).
+    shutdown_db()
     # Riavvio richiesto (es. cambio lingua): rilancia dopo lo shutdown pulito.
     if app.property("restart_requested"):
         _relaunch()

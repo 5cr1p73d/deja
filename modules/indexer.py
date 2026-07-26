@@ -10,7 +10,9 @@ log = logging.getLogger("deja.indexer")
 model = None
 
 def _load_model(retries=3):
-    """Carica il modello embedding con retry+backoff. Ritorna True se ok."""
+    """Carica il modello embedding CONDIVISO (modules.embedder: stessa istanza
+    della ricerca → una sola copia in RAM, e la prima ricerca dell'utente lo
+    trova già caldo). Retry+backoff. Ritorna True se ok."""
     global model
     if model is not None:
         return True
@@ -19,9 +21,9 @@ def _load_model(retries=3):
             # Import lazy: tira torch SOLO qui dentro. Un fallimento di load
             # delle DLL native (WinError 1114) viene catturato e l'indexer si
             # disattiva, senza far crashare l'app all'avvio.
-            from sentence_transformers import SentenceTransformer
+            from modules import embedder
             print("[Indexer] Carico modello embedding (può scaricare al primo avvio)...")
-            model = SentenceTransformer(config.EMBEDDING_MODEL)
+            model = embedder.get_model()
             print("[Indexer] Modello caricato.")
             return True
         except Exception as e:

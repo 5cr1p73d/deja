@@ -87,10 +87,33 @@ def agentic_enabled() -> bool:
 
 def is_local_endpoint(url: str) -> bool:
     """True se l'endpoint punta a un server locale (Ollama, LM Studio, llama.cpp…).
-    Gli endpoint locali OpenAI-compatibili non richiedono API key."""
-    u = (url or "").lower()
-    return (any(h in u for h in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]", "://::1"))
-            or ".local" in u)
+    Gli endpoint locali OpenAI-compatibili non richiedono API key.
+
+    Il controllo è sull'HOSTNAME PARSATO, non su una sottostringa dell'URL: con
+    il match a sottostringa `https://localhost.evil.com` o `https://x.localdomain.com`
+    passavano per "locali" e saltavano l'intero controllo anti-SSRF di
+    `is_safe_endpoint` (http ammesso, nessun blocco degli IP privati)."""
+    import ipaddress
+    from urllib.parse import urlparse
+    u = (url or "").strip()
+    if not u:
+        return False
+    try:
+        host = (urlparse(u if "://" in u else "http://" + u).hostname or "").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    # mDNS/Bonjour: SOLO un vero suffisso .local (non 'localdomain.com').
+    if host.endswith(".local"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)   # solo host IP letterali
+    except ValueError:
+        return False
+    return bool(addr.is_loopback or addr.is_unspecified)
 
 
 def is_safe_endpoint(url: str):
@@ -194,7 +217,7 @@ def generate_daily_summary(day_iso):
                 max_tokens=AI_MAX_TOKENS,
                 temperature=0.5,
             )
-            content = (resp.choices[0].message.content or "").strip()
+            content = _strip_think((resp.choices[0].message.content or ""))
             if content: return True, content
             last_err = "Risposta vuota"
         except Exception as e:
@@ -254,6 +277,13 @@ def list_models(base_url=None, api_key=None):
     cfg = get_ai_config()
     base = (base_url if base_url is not None else cfg["base_url"]).strip() or AI_BASE_URL_DEFAULT
     key  = (api_key  if api_key  is not None else cfg["api_key"]).strip()
+    # Stesso gate anti-SSRF di `_client()`: qui l'URL arriva dal campo di testo
+    # delle Impostazioni e la chiamata PORTA CON SÉ L'API KEY. Senza questo
+    # controllo un base_url sbagliato/ostile la spediva a un host qualsiasi
+    # (o faceva probing dell'intranet / metadata cloud 169.254.169.254).
+    ok, why = is_safe_endpoint(base)
+    if not ok:
+        return False, f"Endpoint non sicuro: {why}"
     if not key:
         if is_local_endpoint(base):
             key = "local"  # endpoint locale: chiave non richiesta
@@ -335,9 +365,41 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Keyword o frase breve (es. 'casa nuova', 'gonka', 'errore python')"},
+                    "queries": {"type": "array", "items": {"type": "string"},
+                                "description": ("MEGLIO di query singola: 2-6 ANGOLI diversi cercati insieme in un "
+                                                "colpo solo (sinonimi, termini correlati, frasi che la persona avrebbe "
+                                                "DETTO davvero). Es. per 'a che ora arriva il tecnico' → ['tecnico', "
+                                                "'appuntamento', 'ti aspetto alle', 'fascia oraria']. Molto più recall "
+                                                "di chiamate ripetute.")},
                     "limit": {"type": "integer", "description": "Max risultati (default 30, max 100)", "default": 30},
+                    "after":  {"type": "string", "description": "Opzionale: tieni solo ricordi DOPO questa data (YYYY-MM-DD o ISO completo). Usa se sai il periodo."},
+                    "before": {"type": "string", "description": "Opzionale: tieni solo ricordi PRIMA di questa data (YYYY-MM-DD o ISO completo)."},
                 },
-                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_memory_detail",
+            "description": (
+                "TESTO COMPLETO di un singolo ricordo, dato tipo e ID (gli stessi dei tag "
+                "[ss:ID]/[au:ID]/[web:ID] che vedi negli altri tool). Usalo quando lo snippet "
+                "di search_memories è tagliato e ti serve il contenuto integrale — es. tutta "
+                "la pagina web (prezzi, dettagli a metà pagina) o l'intera trascrizione — "
+                "prima di rispondere. Testo paginato: se il risultato dice CONTINUA, richiama "
+                "con l'offset indicato."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["ss", "au", "web"],
+                             "description": "ss=screenshot, au=audio, web=pagina web"},
+                    "id": {"type": "integer", "description": "ID numerico dal tag"},
+                    "offset": {"type": "integer", "default": 0,
+                               "description": "Offset caratteri per la paginazione (0 = inizio)"},
+                },
+                "required": ["kind", "id"],
             },
         },
     },
@@ -513,7 +575,7 @@ def _fmt_results(results, query=None, max_chars=700, web_max_chars=1700):
         return "Nessun ricordo trovato."
     out = []
     for r in results:
-        ts = r["ts"][:19].replace("T", " ")
+        ts = _ts_local(r.get("ts"))   # SEMPRE ora locale: vedi _ts_local
         t = r.get("type")
         if t == "screenshot":
             body = _best_snippets(r.get("text"), query, max_chars)
@@ -539,32 +601,101 @@ def _fmt_results(results, query=None, max_chars=700, web_max_chars=1700):
     return "\n\n---\n\n".join(out)
 
 def _tool_search_memories(args):
-    q = str(args.get("query", "") or "").strip()
     limit = min(max(1, _safe_int(args.get("limit"), 30)), 100)
-    if not q:
-        return "Query vuota."
+    # Multi-query ('queries'): più angoli in UNA chiamata → query_many (encode
+    # in un batch) + fusione RRF con garanzia per-lista. 'query' resta per
+    # compatibilità; se presenti entrambi si uniscono.
+    qs = args.get("queries")
+    if isinstance(qs, (list, tuple)):
+        qs = [str(x).strip() for x in qs if str(x).strip()][:6]
+    else:
+        qs = []
+    q = str(args.get("query", "") or "").strip()
+    if q and all(q.lower() != x.lower() for x in qs):
+        qs.insert(0, q)
+    if not qs:
+        return "Query vuota: passa 'query' oppure 'queries'."
+    label = qs[0] if len(qs) == 1 else " | ".join(qs)
     try:
-        results = search_module.query(q, top_k=limit)
+        if len(qs) == 1:
+            results = search_module.query(qs[0], top_k=limit)
+        else:
+            per = search_module.query_many(qs, top_k=max(10, limit))
+            results, _ = _fuse_lists(per, cap=limit * 2)
     except Exception as e:
         return f"Errore ricerca: {e}"
+    # Filtri data opzionali (i ts sono ISO UTC: confronto stringhe ok).
+    after = str(args.get("after") or "").strip()
+    before = str(args.get("before") or "").strip()
+    if after:
+        lo = _norm_bound(after, is_end=False)
+        results = [r for r in results if (r.get("ts") or "") >= lo]
+    if before:
+        hi = _norm_bound(before, is_end=True)
+        results = [r for r in results if (r.get("ts") or "") <= hi]
     if not results:
-        return f"Nessun ricordo trovato per '{q}' in INTERO archivio."
+        rng = f" (finestra {after or '…'} → {before or '…'})" if (after or before) else ""
+        return f"Nessun ricordo trovato per '{label}' in INTERO archivio{rng}."
 
     # query() ritorna screenshot + audio + web (web IN CODA). Un naive
     # results[:limit] poteva buttar fuori le pagine web (testo PIENO, la fonte
     # migliore per il contenuto letto online). Ordina GLOBALMENTE per
     # rilevanza, poi garantisci la presenza di qualche pagina web se esiste.
-    def _rank(r):
-        return (not r.get("exact", False), -float(r.get("score", 0) or 0),
-                -search_module._ts_int(r.get("ts", "")))
-    results.sort(key=_rank)
+    # (multi-query: l'ordine RRF è già globale, non lo si distrugge.)
+    if len(qs) == 1:
+        def _rank(r):
+            return (not r.get("exact", False), -float(r.get("score", 0) or 0),
+                    -search_module._ts_int(r.get("ts", "")))
+        results.sort(key=_rank)
     top = results[:limit]
     web_all = [r for r in results if r.get("type") == "web"]
     if web_all and not any(r.get("type") == "web" for r in top):
         # Riserva gli ultimi slot alle migliori pagine web rimaste fuori.
         reserve = min(3, limit, len(web_all))
         top = top[: max(1, limit - reserve)] + web_all[:reserve]
-    return _fmt_results(top, query=q)
+    return _fmt_results(top, query=" ".join(qs))
+
+_DETAIL_CHUNK = 6000  # caratteri per pagina di get_memory_detail
+
+
+def _tool_get_memory_detail(args):
+    kind = str(args.get("kind") or "").strip().lower()
+    mid = _safe_int(args.get("id"), 0)
+    off = max(0, _safe_int(args.get("offset"), 0))
+    if kind not in ("ss", "au", "web") or mid <= 0:
+        return "Parametri non validi: servono kind ('ss'|'au'|'web') e id numerico."
+    conn = get_conn()
+    try:
+        c = conn.cursor()
+        if kind == "ss":
+            row = c.execute("SELECT ts, app, text FROM screenshots WHERE id=?", (mid,)).fetchone()
+            if not row:
+                return f"Nessuno screenshot con id {mid}."
+            head = f"[ss:{mid}] Screenshot @ {_ts_local(row[0])} | App: {row[1] or '?'}"
+            body = row[2] or ""
+        elif kind == "au":
+            row = c.execute("SELECT ts, source, transcript FROM audio_segments WHERE id=?", (mid,)).fetchone()
+            if not row:
+                return f"Nessun audio con id {mid}."
+            head = f"[au:{mid}] Audio @ {_ts_local(row[0])} | Sorgente: {_audio_src_label(row[1])}"
+            body = row[2] or ""
+        else:
+            row = c.execute("SELECT ts, url, title, text FROM web_pages WHERE id=?", (mid,)).fetchone()
+            if not row:
+                return f"Nessuna pagina web con id {mid}."
+            head = f"[web:{mid}] Pagina web @ {_ts_local(row[0])} | {(row[2] or '').strip()} | {(row[1] or '').strip()}"
+            body = row[3] or ""
+    finally:
+        conn.close()
+    total = len(body)
+    chunk = body[off:off + _DETAIL_CHUNK]
+    if not chunk:
+        return f"{head}\n(nessun testo oltre offset {off}; lunghezza totale {total} caratteri)"
+    out = f"{head}\nCaratteri {off}–{off + len(chunk)} di {total}:\n{chunk}"
+    if off + len(chunk) < total:
+        out += f"\n\n[CONTINUA: richiama get_memory_detail con offset={off + len(chunk)} per il seguito]"
+    return out
+
 
 def _tool_list_recent(args):
     hours = max(1, _safe_int(args.get("hours"), 24))
@@ -579,27 +710,63 @@ def _tool_list_recent(args):
             "SELECT id, ts, app, text FROM screenshots WHERE ts >= ? ORDER BY ts DESC LIMIT ?",
             (cutoff, limit),
         ):
-            txt = (row[3] or "").strip().replace("\n", " ")[:200]
-            lines.append(f"[ss:{row[0]}] {row[1][:19]} | {row[2] or '?'}: {txt}")
+            txt = (row[3] or "").strip().replace("\n", " ")[:280]
+            lines.append(f"[ss:{row[0]}] {_ts_local(row[1])} | {row[2] or '?'}: {txt}")
     if kind in ("all", "audio"):
         for row in c.execute(
             "SELECT id, ts, source, transcript FROM audio_segments WHERE ts >= ? ORDER BY ts DESC LIMIT ?",
             (cutoff, limit),
         ):
-            txt = (row[3] or "").strip().replace("\n", " ")[:200]
-            lines.append(f"[au:{row[0]}] {row[1][:19]} | {_audio_src_label(row[2])}: {txt}")
+            txt = (row[3] or "").strip().replace("\n", " ")[:280]
+            lines.append(f"[au:{row[0]}] {_ts_local(row[1])} | {_audio_src_label(row[2])}: {txt}")
     conn.close()
     return "\n".join(lines) if lines else f"Nessuna attività nelle ultime {hours}h."
 
 def _norm_bound(v, is_end):
-    """Normalizza un estremo del range: 'YYYY-MM-DD' → giorno intero; un ISO con
-    'T' → istante preciso (finestra fine). Aggiunge TZ UTC se assente."""
+    """Normalizza un estremo del range in ISO **UTC** (i ts sul DB sono UTC).
+
+    L'input arriva dal modello, che ragiona sulla `DATA ODIERNA` — che è LOCALE.
+    Quindi 'YYYY-MM-DD' e gli ISO senza offset vanno interpretati come ORA
+    LOCALE e convertiti. Prima venivano marcati '+00:00' a forza: con l'Italia a
+    UTC+2, "oggi" chiedeva 02:00→01:59 locali, cioè perdeva la prima fascia
+    della giornata e includeva la sera precedente."""
     v = (v or "").strip()
-    if "T" in v:
-        if "+" not in v and "Z" not in v[10:]:
-            v += "+00:00"
+    if not v:
         return v
-    return v + ("T23:59:59+00:00" if is_end else "T00:00:00+00:00")
+    try:
+        if "T" in v:
+            iso = v.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(iso)
+        else:
+            dt = datetime.fromisoformat(
+                v + ("T23:59:59.999999" if is_end else "T00:00:00"))
+        if dt.tzinfo is None:
+            dt = dt.astimezone()          # naive = ora locale dell'utente
+        return dt.astimezone(timezone.utc).isoformat()
+    except Exception:
+        # Formato imprevisto: comportamento storico, meglio di un crash.
+        if "T" in v:
+            return v if ("+" in v[10:] or "Z" in v[10:]) else v + "+00:00"
+        return v + ("T23:59:59+00:00" if is_end else "T00:00:00+00:00")
+
+
+def _ts_local(ts_iso, seconds=True):
+    """Timestamp del DB (UTC) → stringa in ORA LOCALE per il modello.
+
+    I ts sono salvati in UTC ma `_now_context()` dà la data/ora LOCALE: mostrare
+    l'UTC grezzo faceva riferire al modello orari sfasati di 1-2h rispetto a
+    quelli che l'utente ha vissuto ('a che ora ho aperto X' → risposta sbagliata
+    di default). Qui si converte una volta sola, nel punto di formattazione."""
+    if not ts_iso:
+        return "?"
+    try:
+        dt = datetime.fromisoformat(str(ts_iso).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone()
+        return dt.strftime("%Y-%m-%d %H:%M:%S" if seconds else "%Y-%m-%d %H:%M")
+    except Exception:
+        return str(ts_iso)[:19].replace("T", " ")
 
 
 def _audio_src_label(source):
@@ -626,16 +793,16 @@ def _tool_list_by_date_range(args):
             (start_iso, end_iso, limit),
         ):
             ss_n += 1
-            txt = (row[3] or "").strip().replace("\n", " ")[:200]
-            lines.append(f"[ss:{row[0]}] {row[1][:19]} | {row[2] or '?'}: {txt}")
+            txt = (row[3] or "").strip().replace("\n", " ")[:280]
+            lines.append(f"[ss:{row[0]}] {_ts_local(row[1])} | {row[2] or '?'}: {txt}")
     if kind in ("all", "audio"):
         for row in c.execute(
             "SELECT id, ts, source, transcript FROM audio_segments WHERE ts >= ? AND ts <= ? ORDER BY ts DESC LIMIT ?",
             (start_iso, end_iso, limit),
         ):
             au_n += 1
-            txt = (row[3] or "").strip().replace("\n", " ")[:200]
-            lines.append(f"[au:{row[0]}] {row[1][:19]} | {_audio_src_label(row[2])}: {txt}")
+            txt = (row[3] or "").strip().replace("\n", " ")[:280]
+            lines.append(f"[au:{row[0]}] {_ts_local(row[1])} | {_audio_src_label(row[2])}: {txt}")
     conn.close()
     if not lines:
         return f"Nessuna attività tra {start} e {end}."
@@ -662,8 +829,10 @@ def _tool_list_system_events(args):
     start = str(args.get("start") or "").strip()
     end   = str(args.get("end") or "").strip()
     if start:
-        start_iso = start + "T00:00:00+00:00"
-        end_iso = (end or start) + "T23:59:59+00:00"
+        # Le date arrivano dal modello che ragiona sulla DATA ODIERNA locale:
+        # vanno interpretate come giorni LOCALI (vedi _norm_bound), non UTC.
+        start_iso = _norm_bound(start, is_end=False)
+        end_iso = _norm_bound(end or start, is_end=True)
     else:
         hours = max(1, _safe_int(args.get("hours"), 24))
         start_iso = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
@@ -690,7 +859,7 @@ def _tool_list_system_events(args):
     for row in c.execute(sql, params):
         subj = (row[5] or "").strip().replace("\n", " ")[:120]
         txt = (row[6] or "").strip().replace("\n", " ")[:200]
-        lines.append(f"{row[1][:19]} | {row[3]}/{row[4]}: {txt}" + (f" ({subj})" if subj and subj not in txt else ""))
+        lines.append(f"{_ts_local(row[1])} | {row[3]}/{row[4]}: {txt}" + (f" ({subj})" if subj and subj not in txt else ""))
     conn.close()
     if lines:
         hdr = f"{len(lines)} eventi (ordine {'crescente' if order == 'ASC' else 'decrescente'} per data):\n"
@@ -712,11 +881,11 @@ def _tool_memory_stats(_args):
     conn.close()
     out = [
         f"Screenshot: {ss_total} totali",
-        f"  primo: {(ss_first[0] or 'n/a')[:19]}",
-        f"  ultimo: {(ss_first[1] or 'n/a')[:19]}",
+        f"  primo: {_ts_local(ss_first[0]) if ss_first[0] else 'n/a'}",
+        f"  ultimo: {_ts_local(ss_first[1]) if ss_first[1] else 'n/a'}",
         f"Audio: {au_total} segmenti",
-        f"  primo: {(au_first[0] or 'n/a')[:19]}",
-        f"  ultimo: {(au_first[1] or 'n/a')[:19]}",
+        f"  primo: {_ts_local(au_first[0]) if au_first[0] else 'n/a'}",
+        f"  ultimo: {_ts_local(au_first[1]) if au_first[1] else 'n/a'}",
     ]
     return "\n".join(out)
 
@@ -737,6 +906,7 @@ def _execute_tool(name, args):
         norm = "".join(ch for ch in (name or "").lower() if ch.isalnum())
         dispatch = {
             "searchmemories":   _tool_search_memories,
+            "getmemorydetail":  _tool_get_memory_detail,
             "listrecent":       _tool_list_recent,
             "listbydaterange":  _tool_list_by_date_range,
             "listsystemevents": _tool_list_system_events,
@@ -774,113 +944,254 @@ def _trim_history(messages, max_tokens):
         tail.pop(0)
     return head + tail
 
+
+# Tetto sul singolo risultato di tool messo in conversazione: `search_memories`
+# con limit=100 produce decine di migliaia di caratteri e da solo può saturare
+# il contesto dopo due o tre giri.
+MAX_TOOL_RESULT_CHARS = 14000
+
+
+def _clip_tool_result(text: str) -> str:
+    t = text or ""
+    if len(t) <= MAX_TOOL_RESULT_CHARS:
+        return t
+    return (t[:MAX_TOOL_RESULT_CHARS].rstrip()
+            + f"\n\n[…troncato a {MAX_TOOL_RESULT_CHARS} caratteri: usa filtri più "
+              "stretti (limit, date, subject) o get_memory_detail per leggere un "
+              "singolo ricordo per intero]")
+
+
+def _trim_for_tools(messages, max_tokens):
+    """Come `_trim_history`, ma consapevole delle chiamate a tool.
+
+    Nel loop a tool il contesto si gonfia a ogni giro (assistant con tool_calls +
+    risultato). Prima si trimmava UNA volta sola prima del loop → dopo 3-4 giri
+    si sforava il contesto del modello e l'endpoint rispondeva errore. Qui si
+    ri-trimma a ogni iterazione, scartando i BLOCCHI più vecchi per intero: un
+    messaggio `role='tool'` non deve mai restare orfano della sua assistant con
+    `tool_calls`, altrimenti l'API rifiuta la richiesta (400)."""
+    if _approx_tokens(messages) <= max_tokens:
+        return messages
+    head = [messages[0]] if messages and messages[0].get("role") == "system" else []
+    rest = messages[len(head):]
+
+    # Raggruppa in blocchi atomici: assistant(tool_calls) + i suoi tool result.
+    blocks, i = [], 0
+    while i < len(rest):
+        m = rest[i]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            j = i + 1
+            while j < len(rest) and rest[j].get("role") == "tool":
+                j += 1
+            blocks.append(rest[i:j]); i = j
+        else:
+            blocks.append([m]); i += 1
+
+    # L'ULTIMO blocco (di solito la domanda corrente o l'ultimo risultato tool)
+    # non si tocca mai: senza, il modello perde ciò a cui deve rispondere.
+    while len(blocks) > 1:
+        flat = head + [m for b in blocks for m in b]
+        if _approx_tokens(flat) <= max_tokens:
+            return flat
+        blocks.pop(0)
+    return head + [m for b in blocks for m in b]
+
 # ── Streaming chat with tool calls ─────────────────────────────────
+MAX_TOOL_ITERATIONS = 8   # giri di chiamate a tool prima della chiusura forzata
+
+# Capability dell'endpoint scoperte a runtime. Alcuni provider OpenAI-compatibili
+# rifiutano `tool_choice="required"` e/o `frequency_penalty`: senza memoria della
+# cosa, OGNI iterazione (e ogni messaggio) sprecava una chiamata destinata a
+# fallire prima del retry. Si azzera al cambio di endpoint/modello.
+_EP_CAPS = {"key": None, "unsupported": set()}
+
+
+def _ep_key():
+    try:
+        cfg = get_ai_config()
+        return (cfg.get("base_url") or "", cfg.get("model") or "")
+    except Exception:
+        return ("", "")
+
+
+def _ep_supports(param: str) -> bool:
+    if _EP_CAPS["key"] != _ep_key():
+        _EP_CAPS["key"] = _ep_key()
+        _EP_CAPS["unsupported"] = set()
+    return param not in _EP_CAPS["unsupported"]
+
+
+def _ep_mark_unsupported(params, err=None):
+    _EP_CAPS["key"] = _ep_key()
+    _EP_CAPS["unsupported"].update(params)
+    print(f"[AI] endpoint senza {sorted(params)} → non li riuso ({str(err)[:90]})")
+
+
+# Chiacchiera: saluti, ringraziamenti, conferme. Su questi NON si forza una
+# chiamata a tool (una ricerca a vuoto prima di poter dire 'ciao').
+_SMALLTALK_WORD = (
+    r"(?:ciao|salve|ehi|hey|hola|hi|hello|buon\s*(?:giorno|a\s*sera|a\s*notte)|"
+    r"buonasera|buonanotte|grazie(?:\s+mille|\s+tante)?|ti\s+ringrazio|ok(?:ay)?|"
+    r"va\s+bene|perfetto|ottimo|bene|capito|chiaro|scusa(?:mi)?|prego|figurati|"
+    r"come\s+stai|come\s+va|tutto\s+bene|ci\s+sei|sei\s+l[ìi]|test|ping|s[iì]|no|"
+    r"niente|nulla|lol|[ah]{4,}|bravo|top|grande|ciao\s+ciao|a\s+dopo|notte)"
+)
+# Fino a 3 formule di cortesia di fila ('perfetto, grazie', 'ok ciao'): tutto
+# il messaggio deve essere cortesia, altrimenti è una domanda vera.
+_SMALLTALK_RE = re.compile(
+    r"^\s*(?:" + _SMALLTALK_WORD + r"[\s.!?…,:;)*_\-]*){1,3}$", re.I)
+
+
+def _looks_like_smalltalk(message: str) -> bool:
+    """Vero solo per messaggi CORTI e interamente conversazionali. Deliberatamente
+    conservativo: nel dubbio si cerca (meglio una ricerca in più che una risposta
+    inventata)."""
+    m = (message or "").strip()
+    if not m or len(m) > 40:
+        return False
+    if "?" in m and not _SMALLTALK_RE.match(m):
+        return False
+    return bool(_SMALLTALK_RE.match(m))
+
+
 SYSTEM_PROMPT = (
-    "Sei Déjà, assistente AI personale dell'utente.\n\n"
-    "════ REGOLA #0 — NON INVENTARE MAI (la più importante) ════\n"
-    "Tu NON hai memoria delle attività dell'utente: la conosci SOLO attraverso i risultati "
-    "dei tool. Quindi:\n"
-    "• È ASSOLUTAMENTE VIETATO produrre riassunti, elenchi, frasi citate, nomi, prezzi, "
-    "quantità, orari, titoli o QUALSIASI dettaglio concreto che non sia LETTERALMENTE presente "
-    "in un risultato di tool appena ricevuto. Niente esempi plausibili, niente 'tipicamente', "
-    "niente riempire i vuoti.\n"
-    "• Per OGNI domanda su ricordi/conversazioni/attività/contenuti DEVI prima chiamare un "
-    "tool e aspettarne il risultato. Se non hai (ancora) chiamato un tool, NON rispondere nel "
-    "merito: chiama il tool. Mai rispondere 'a memoria' o per intuizione.\n"
-    "• Se i tool non restituiscono nulla, o restituiscono poco, DILLO chiaramente "
-    "('Non ho trovato registrazioni per ieri') invece di inventare. Una risposta vuota onesta "
-    "è SEMPRE meglio di una inventata. Mai abbellire o estrapolare oltre il testo grezzo.\n"
-    "• Riporta i contenuti il più possibile VERBATIM dai risultati (con i tag [ss:ID]/[au:ID]). "
-    "Se un dato non c'è nel testo del tool, NON esiste per te.\n"
-    "═══════════════════════════════════════════════════════════\n\n"
-    "Hai accesso COMPLETO e SENZA LIMITI TEMPORALI alla sua memoria digitale:\n"
-    "- screenshot con OCR (testo estratto da ogni schermata) → cosa ha VISTO/letto\n"
-    "- trascrizioni audio (microfono + audio sistema) → cosa ha SENTITO/detto\n"
-    "- eventi di sistema/browser → le AZIONI sul PC (app aperte/chiuse, file, programmi "
-    "installati, USB, rete, standby, blocco sessione, download, tab, pagine visitate)\n"
-    "L'archivio copre TUTTO lo storico — può estendersi a mesi o anni. "
-    "NON ASSUMERE MAI un limite temporale arbitrario (es. '7 giorni'). "
-    "Se non sai quanto in là va l'archivio, chiama 'memory_stats'.\n\n"
-    "TOOL DISPONIBILI:\n"
-    "- 'search_memories(query, limit)' → ricerca semantica+esatta su screenshot+audio, "
-    "INTERO database, nessun filtro temporale. Per domande sul CONTENUTO (cosa ho letto/"
-    "visto/detto su un tema), anche vecchio.\n"
-    "- 'list_recent(hours, kind)' → screenshot/audio nelle ultime ore (max 168=7gg).\n"
-    "- 'list_by_date_range(start, end, kind)' → screenshot/audio in un range di date.\n"
-    "- 'list_system_events(category, subject, action, order, start/end|hours)' → AZIONI sul "
-    "PC. Usa SEMPRE questo (NON gli screenshot) per: quando/quante volte ho aperto o chiuso "
-    "un'app, cosa ho scaricato, quando ho installato/disinstallato qualcosa, file creati/"
-    "cancellati, USB collegata, quando ho bloccato il PC, ecc. Filtra con subject (nome app/"
-    "file) e action (start=apertura, stop=chiusura).\n"
-    "- 'memory_stats()' → estensione totale archivio (date primo/ultimo screen+audio).\n\n"
-    "INSTRADAMENTO (scegli il tool giusto PRIMA di rispondere):\n"
-    "• 'a che ora ho aperto/chiuso X', 'quante volte ho usato X', 'che app ho aperto', "
-    "'cosa ho scaricato/installato', 'quando ho collegato la chiavetta' → list_system_events "
-    "(category='process' per app; subject=nome). NON cercare negli screenshot per queste cose: "
-    "lì NON c'è l'orario di apertura/chiusura.\n"
-    "• 'cosa diceva quella pagina/quel articolo che leggevo', 'dov'è che ho letto X', "
-    "'riassumi la pagina su Y', 'di cosa parlavo' → search_memories. Le PAGINE WEB visitate "
-    "sono salvate col TESTO COMPLETO (estensione browser): per il contenuto di ciò che l'utente "
-    "leggeva online sono la fonte migliore, molto più dell'OCR. Non ignorarle: se tra i risultati "
-    "ci sono righe 'Pagina web [web:ID]', USALE e citale.\n"
-    "• 'quanto ho speso/pagato per X', 'che prezzo aveva X', 'quanto costa la cosa che ho visto' → "
-    "search_memories col NOME del prodotto (es. 'sedia ergonomica'). Prezzi, totali e dettagli "
-    "d'acquisto stanno nelle PAGINE WEB catturate (a volte negli screenshot del checkout): lo "
-    "snippet del tool è centrato sul prezzo — leggilo e riporta l'importo ESATTO col tag "
-    "[web:ID]/[ss:ID]. Se in una pagina ci sono più prezzi, scegli quello del prodotto giusto e "
-    "dillo; non sommare/indovinare.\n\n"
-    "AUDIO — due sorgenti, significato diverso:\n"
-    "• 'microfono (voce utente)' = sta parlando L'UTENTE (o chi gli sta accanto fisicamente).\n"
-    "• 'audio di sistema (altoparlanti)' = ciò che usciva dalle casse: può essere un'ALTRA "
-    "persona (es. in chiamata/gioco online) MA ANCHE un video YouTube, musica, audio di gioco. "
-    "NON dare per scontato che sia una conversazione: capiscilo dal contenuto della trascrizione "
-    "e dagli screenshot vicini (es. se la finestra era YouTube → è un video, non un dialogo). "
-    "Quando riferisci, distingui: 'tu dicevi…' (microfono) vs 'dalle casse/nel video si sentiva…' "
-    "(sistema), e dì se sembra dialogo o media.\n\n"
-    "DOMANDE 'cosa si diceva / di che si parlava MENTRE facevo X' (es. 'mentre giocavo ad Apex'):\n"
-    "L'audio quasi MAI contiene il nome del gioco/app, quindi cercare 'apex' tra le trascrizioni "
-    "fallisce — NON concludere 'non c'è audio'. Procedi a due passi:\n"
-    "  1) Trova QUANDO l'utente faceva X: list_system_events(category='process', subject='X') per "
-    "gli orari apri/chiudi, oppure search_memories('X') per gli screenshot (leggine i timestamp).\n"
-    "  2) Prendi l'AUDIO di quella finestra: list_by_date_range(start, end, kind='audio') passando "
-    "l'intervallo trovato CON l'ora (es. start='2026-06-10T20:10:00', end='2026-06-10T21:00:00').\n"
-    "  3) Riassumi le trascrizioni in quella finestra, distinguendo microfono vs sistema.\n\n"
-    "REGOLE:\n"
-    "1. DATE: usa la DATA ODIERNA indicata sotto come riferimento per 'oggi/ieri/questa "
-    "settimana'. 'oggi' = la data odierna; 'ieri' = il giorno PRIMA; calcola i range da lì. "
-    "Per UN SOLO giorno (ieri, oggi, una data precisa) metti lo STESSO valore in start E end "
-    "(es. ieri → start='2026-06-10', end='2026-06-10'): NON mettere il giorno dopo in end, o "
-    "includi giorni sbagliati. Se un tool risponde 'troncato', i risultati sono solo i più "
-    "recenti del periodo: RESTRINGI a un giorno/intervallo più piccolo (NON concludere 'non ci "
-    "sono dati' solo perché vedi un altro giorno). In dubbio sull'estensione dati → memory_stats.\n"
-    "2. Se utente chiede di cose vecchie → usa il tool con un range date adatto. MAI dire "
-    "'ho solo gli ultimi N giorni'. Prima di dire 'non ho dati per il periodo X' → VERIFICA "
-    "con memory_stats (o list_system_events allargando il periodo).\n"
-    "3. NON sfidarti dei primi 100 risultati a caso: se cerchi una cosa specifica RESTRINGI "
-    "(subject, action, category, range di date) invece di scorrere liste lunghe. Per 'la PRIMA "
-    "volta' usa order='asc'; per 'l'ultima/più recente' order='desc'. Se un tool tronca i "
-    "risultati e non trovi ciò che serve, rifai la chiamata con filtri più stretti o un "
-    "periodo diverso, NON arrenderti al primo tentativo.\n"
-    "4. Combina più chiamate se serve (es. per 'aperto e poi chiuso Chrome' una con "
-    "action='start' e una con action='stop', o una sola e leggi entrambe le righe). MA non "
-    "ripetere la STESSA chiamata con argomenti quasi identici: se un tool torna VUOTO, CAMBIA "
-    "approccio (altra fonte, altro filtro, altro periodo), non riprovarlo uguale. Hai poche "
-    "chiamate a disposizione: usale bene. Per 'di cosa parlavo mentre facevo X', se gli eventi "
-    "non danno l'orario (cattura magari OFF in quel periodo), passa SUBITO a search_memories('X') "
-    "sugli screenshot per trovare la finestra, poi list_by_date_range(kind='audio').\n"
-    "5. Cita timestamp e app/sorgente nelle risposte.\n"
-    "6. **CITAZIONI FONTI**: per fatti presi da uno SCREENSHOT, AUDIO o PAGINA WEB inserisci "
-    "subito dopo la frase il tag `[ss:ID]`, `[au:ID]` o `[web:ID]` (ID esatto dal tool); l'UI li "
-    "rende card cliccabili (la card web apre l'URL). Per gli eventi di sistema NON usare tag: "
-    "cita solo l'orario in chiaro.\n"
-    "7. Rispondi sempre in italiano, conciso. Se davvero non trovi nulla dopo aver provato "
-    "filtri/keyword diversi, dillo — e se è una domanda da eventi e non trovi nulla, ricorda "
-    "che la cattura eventi è OFF di default e va attivata in Impostazioni → Eventi.\n"
-    "8. STILE OUTPUT: scrivi SOLO la risposta finale, pulita e diretta. NON mostrare il tuo "
-    "ragionamento passo-passo, NON scrivere meta-frasi tipo 'vedo che…', 'devo controllare…', "
-    "'sembra che…'. MAI ripetere la stessa frase. Usa pochi bullet brevi quando aiuta. Quando "
-    "riassumi tante trascrizioni, raggruppa per tema/momento in 3-6 punti, non elencare ogni "
-    "frammento."
+    "Sei Déjà: l'assistente che sa rispondere su ciò che questa persona ha "
+    "davvero visto, sentito e fatto al PC.\n\n"
+
+    "╔═ 1. LA REGOLA CHE VIENE PRIMA DI TUTTE ═╗\n"
+    "Tu NON ricordi nulla dell'utente. Conosci la sua vita digitale SOLO "
+    "attraverso il testo che i tool ti restituiscono, in questo turno.\n"
+    "• Nessun dettaglio concreto — nome, cifra, orario, titolo, prezzo, frase "
+    "citata — può uscire dalla tua bocca se non è LETTERALMENTE in un risultato "
+    "di tool che hai appena letto. Niente esempi plausibili, niente 'di solito', "
+    "niente colmare i buchi.\n"
+    "• Domanda su ricordi/attività/contenuti ⇒ PRIMA chiami un tool, POI parli. "
+    "Mai rispondere a intuito, nemmeno se la risposta ti sembra ovvia.\n"
+    "• Se i tool non danno nulla, dillo. «Non ho trovato registrazioni di ieri "
+    "sera» è una risposta OTTIMA. Una inventata è un danno: l'utente si fida di "
+    "te per ricostruire cose che lui stesso non ricorda, e non ha modo di "
+    "accorgersi che stai sbagliando.\n"
+    "• Numeri, prezzi, orari e frasi: VERBATIM dal testo del tool. Se il dato non "
+    "c'è nel testo, per te non esiste.\n"
+    "╚════════════════════════════════════════╝\n\n"
+
+    "── 2. COSA C'È IN ARCHIVIO ──\n"
+    "• SCHERMATE con OCR → ciò che l'utente ha VISTO a schermo.\n"
+    "• TRASCRIZIONI AUDIO (microfono + audio di sistema) → ciò che ha DETTO e SENTITO.\n"
+    "• PAGINE WEB con testo integrale (estensione browser) → ciò che ha LETTO online. "
+    "Sono la fonte migliore per contenuti, prezzi e dettagli: molto più affidabili "
+    "dell'OCR. Se tra i risultati c'è una 'Pagina web [web:ID]', usala e citala.\n"
+    "• EVENTI di sistema/browser → le AZIONI: app aperte/chiuse, file, installazioni, "
+    "USB, rete, standby, blocco sessione, download, tab, pagine visitate.\n"
+    "L'archivio copre TUTTO lo storico, anche mesi o anni fa. Non esiste un limite "
+    "tipo 'ultimi 7 giorni': non inventartelo. Se non sai quanto indietro arriva, "
+    "chiama 'memory_stats'.\n"
+    "NON è in archivio: ciò che l'utente ha digitato senza che comparisse a schermo, "
+    "il contenuto di file mai aperti, quello che ha pensato. Se ti chiedono questo, "
+    "dillo.\n\n"
+
+    "── 3. IL TEMPO (leggi con attenzione) ──\n"
+    "• TUTTI gli orari che i tool ti mostrano sono già in ORA LOCALE dell'utente, "
+    "la stessa fuso della DATA ODIERNA qui sotto. Riportali così come sono, senza "
+    "conversioni né fusi orari.\n"
+    "• Anche le date che passi ai tool (start/end) sono giorni LOCALI.\n"
+    "• 'oggi' = la DATA ODIERNA. 'ieri' = il giorno prima. Per UN SOLO giorno metti "
+    "lo STESSO valore in start e end (ieri → start='2026-06-10', end='2026-06-10'): "
+    "mettere il giorno dopo in end include un giorno sbagliato.\n"
+    "• Distingui SEMPRE 'quando è successo' (l'orario nel timestamp) da 'quando è "
+    "stato detto che sarebbe successo' (un orario dentro il testo). Non confonderli.\n\n"
+
+    "── 4. QUALE TOOL, QUANDO ──\n"
+    "  Domanda su …                              → Tool\n"
+    "  contenuto: cosa ho letto/visto/detto su X → search_memories(queries=[…])\n"
+    "  prezzo/spesa/costo di X                   → search_memories col NOME del prodotto\n"
+    "  quando ho aperto/chiuso/usato un'app      → list_system_events(category='process')\n"
+    "  cosa ho scaricato / installato / USB      → list_system_events\n"
+    "  cosa ho fatto in un giorno/periodo        → list_by_date_range\n"
+    "  cosa ho fatto nelle ultime ore            → list_recent\n"
+    "  il testo COMPLETO di un ricordo           → get_memory_detail(kind, id)\n"
+    "  fin dove arriva l'archivio                → memory_stats\n\n"
+    "'search_memories(query | queries=[…], limit, after, before)' — ricerca "
+    "semantica+esatta su schermate, audio e pagine web, sull'INTERO archivio.\n"
+    "  ▸ USA 'queries' con 2-6 angoli DIVERSI in una sola chiamata: rende molto di "
+    "più di una keyword sola e di chiamate ripetute.\n"
+    "  ▸ Gli angoli migliori NON sono l'etichetta astratta ma le PAROLE CHE LA "
+    "PERSONA AVREBBE DAVVERO DETTO O LETTO. Per 'a che ora arriva il tecnico?' → "
+    "['tecnico', 'appuntamento', 'ti aspetto alle', 'passo verso le', 'fascia oraria']. "
+    "Così trovi la risposta anche quando il ricordo non nomina l'argomento.\n"
+    "  ▸ Se conosci il periodo, restringi con after/before (YYYY-MM-DD).\n"
+    "'get_memory_detail(kind, id, offset)' — kind 'ss'|'au'|'web', id dal tag. "
+    "Gli snippet delle liste sono tagliati a ~280 caratteri: se il dato che ti "
+    "serve (prezzo, orario, nome) sta proprio dove il testo è troncato, NON tirare "
+    "a indovinare — leggi il ricordo per intero. Vale soprattutto per riassumere "
+    "una conversazione: leggi i segmenti audio promettenti, non fermarti agli "
+    "spezzoni. Se il risultato dice CONTINUA, richiama con l'offset indicato.\n"
+    "'list_system_events(category, subject, action, order, start/end|hours)' — "
+    "gli ORARI di apertura/chiusura stanno QUI, non negli screenshot. Filtra con "
+    "subject (nome app/file) e action ('start' = apertura, 'stop' = chiusura). "
+    "order='asc' per «la prima volta che…», 'desc' per «l'ultima volta».\n\n"
+
+    "── 5. AUDIO: capire chi parla ──\n"
+    "• 'microfono' = la voce dell'utente o di chi gli sta accanto.\n"
+    "• 'audio di sistema' = ciò che usciva dalle casse: può essere un'altra persona "
+    "in chiamata, ma anche un video, musica, l'audio di un gioco.\n"
+    "• NON dedurre i ruoli dal solo canale: una telefonata fatta col cellulare "
+    "finisce TUTTA sul microfono, entrambe le voci. Capisci chi è chi dal CONTENUTO "
+    "(chi chiede e chi risponde, chi è l'operatore e chi il cliente).\n"
+    "• Quando riferisci, distingui: «tu dicevi…» / «dalle casse si sentiva…», e dì "
+    "se sembra un dialogo o un contenuto riprodotto (se la finestra era YouTube, è "
+    "un video, non una conversazione).\n\n"
+
+    "── 6. «Di cosa si parlava MENTRE facevo X» ──\n"
+    "L'audio quasi mai contiene il nome dell'app o del gioco: cercare 'apex' tra le "
+    "trascrizioni non trova niente, e NON significa che non ci sia audio. Due passi:\n"
+    "  1) QUANDO faceva X → list_system_events(category='process', subject='X') per "
+    "gli orari; se gli eventi non ci sono (cattura eventi magari spenta), "
+    "search_memories('X') e leggi i timestamp delle schermate.\n"
+    "  2) L'AUDIO di quella finestra → list_by_date_range(start, end, kind='audio') "
+    "CON l'ora (es. start='2026-06-10T20:10:00', end='2026-06-10T21:00:00').\n\n"
+
+    "── 7. COME CERCARE BENE (hai poche chiamate) ──\n"
+    "• Parti largo con 'queries' multiple, poi STRINGI con i filtri. Non scorrere "
+    "liste lunghe sperando di inciampare nella risposta.\n"
+    "• Un tool che torna VUOTO non è una risposta: CAMBIA angolo — altre parole, "
+    "altra fonte, altro periodo. Non ripetere MAI la stessa chiamata con argomenti "
+    "quasi identici: è l'unico vero modo di sprecare il tuo budget.\n"
+    "• Se un risultato dice TRONCATO, stai vedendo solo i più recenti: restringi il "
+    "periodo, non concludere «non c'è nulla».\n"
+    "• Prima di dire «non ho dati per quel periodo», verifica con memory_stats.\n"
+    "• Quando hai abbastanza per rispondere, FERMATI e rispondi. Cercare ancora "
+    "«per sicurezza» fa solo aspettare l'utente.\n\n"
+
+    "── 8. DATI PARZIALI O IN CONTRADDIZIONE ──\n"
+    "• Trovato solo un pezzo? Dai il pezzo e dì cosa manca: «Alle 14:32 parlavate "
+    "del preventivo, ma la cifra non compare in nessuna registrazione».\n"
+    "• Due ricordi si contraddicono (due prezzi, due orari)? Riportali ENTRAMBI col "
+    "loro momento e la loro fonte, e dì qual è il più recente. Non scegliere per lui "
+    "in silenzio.\n"
+    "• L'OCR sbaglia: se un numero sembra corrotto (una I al posto di un 1, spazi in "
+    "mezzo a una cifra) dillo invece di 'correggerlo' da solo.\n"
+    "• Se la domanda è ambigua, prendi la lettura più probabile, rispondi, e chiudi "
+    "con una riga che offre l'altra. Non bloccarti a chiedere chiarimenti.\n\n"
+
+    "── 9. COME SI SCRIVE LA RISPOSTA ──\n"
+    "• La RISPOSTA per prima, nella prima frase. Poi, se serve, il dettaglio.\n"
+    "• Niente preamboli, niente ragionamento a voce alta: mai «vedo che…», «devo "
+    "controllare…», «sembra che…», «fammi cercare…». L'utente vuole il risultato.\n"
+    "• Conciso. Pochi bullet solo quando aiutano davvero. Riassumendo molte "
+    "trascrizioni, raggruppa per tema o momento in 3-6 punti: non elencare ogni "
+    "frammento uno per uno.\n"
+    "• MAI ripetere la stessa frase o lo stesso blocco due volte.\n"
+    "• Cita l'orario e l'app/sorgente quando danno contesto.\n"
+    "• **CITAZIONI**: dopo ogni fatto preso da un ricordo metti il tag `[ss:ID]`, "
+    "`[au:ID]` o `[web:ID]` con l'ID ESATTO del tool — l'interfaccia li trasforma in "
+    "schede cliccabili, e la scheda web apre la pagina. È così che l'utente verifica "
+    "che non ti stia inventando niente: non saltarli e non inventare ID. Per gli "
+    "eventi di sistema niente tag: cita l'orario in chiaro.\n"
+    "• Se non hai trovato nulla, chiudi suggerendo una via concreta (un altro "
+    "periodo, un'altra parola, un'altra fonte). Se la domanda riguardava eventi e "
+    "non c'è nulla, ricorda che la cattura eventi è SPENTA di default e si attiva in "
+    "Impostazioni → Eventi.\n"
 )
 
 
@@ -891,12 +1202,15 @@ def _now_context() -> str:
         now = datetime.now().astimezone()
         giorni = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
         return (f"\n\nDATA ODIERNA: {giorni[now.weekday()]} {now.strftime('%Y-%m-%d')}, "
-                f"ora locale {now.strftime('%H:%M')}. Usala per ogni calcolo di date.")
+                f"ora locale {now.strftime('%H:%M')}. Usala per ogni calcolo di date. "
+                "Gli orari dei ricordi sono nello STESSO fuso: riportali tali e quali, "
+                "senza conversioni.")
     except Exception:
         return ""
 
 def _complete(client, model, messages, max_tokens, temperature=0.3):
-    """Chiamata non-streaming con retry su errori transitori. Ritorna testo."""
+    """Chiamata non-streaming con retry su errori transitori. Ritorna testo
+    già ripulito dai blocchi <think> dei modelli reasoning."""
     last = None
     for attempt in range(3):
         try:
@@ -904,7 +1218,7 @@ def _complete(client, model, messages, max_tokens, temperature=0.3):
                 model=model, messages=messages,
                 max_tokens=max_tokens, temperature=temperature,
             )
-            return (r.choices[0].message.content or "").strip()
+            return _strip_think((r.choices[0].message.content or "")).strip()
         except Exception as e:
             last = str(e); s = last.lower()
             retryable = any(x in s for x in ("429", "500", "502", "503", "504",
@@ -923,12 +1237,111 @@ _NOTHING_RE = re.compile(
     r"non c'?è nulla|no relevant|nothing (?:relevant|found))\b", re.I)
 
 
+# Un tag di citazione = il testo sta riportando un FATTO preso da un ricordo.
+_REF_ANY_RE = re.compile(r"\[(?:ss|au|web):\d+\]")
+
+
 def _is_nothing(txt: str) -> bool:
+    """True se il testo è, in sostanza, un 'non ho trovato niente'.
+
+    Il vecchio test (`len<=100 and regex`) aveva FALSI POSITIVI che sopprimevano
+    risposte valide: "Nessun errore Python, ma alle 15 hai aperto Chrome" contiene
+    'nessun' ed è corta → veniva scambiata per non-risposta e buttata. Ora una
+    citazione o un dato numerico bastano a dire che un fatto c'è: nel dubbio si
+    preferisce MOSTRARE (al massimo si perde un fallback) piuttosto che nascondere
+    una risposta buona."""
     t = (txt or "").strip()
-    if not t or t.upper() == "NIENTE":
+    if not t:
         return True
-    # Risposta breve che dice in sostanza "non ho trovato".
-    return len(t) <= 100 and bool(_NOTHING_RE.search(t))
+    if t.upper().strip(" .!\"'") == "NIENTE":
+        return True
+    if len(t) > 160:
+        return False
+    if not _NOTHING_RE.search(t):
+        return False
+    if _REF_ANY_RE.search(t) or re.search(r"\d", t):
+        return False   # cita un ricordo o riporta un numero/orario → è un fatto
+    return True
+
+
+# ── Reasoning models: blocchi <think> nel content ───────────────────
+# Alcuni modelli (MiniMax, Qwen-think, DeepSeek-R1 via certi provider) mettono
+# il ragionamento <think>…</think> DENTRO message.content. Va rimosso OVUNQUE:
+# 1) non va mai mostrato all'utente né salvato in history;
+# 2) MASCHERA i sentinel — un worker che "pensa" a lungo e poi dice NIENTE non
+#    veniva riconosciuto come niente → decine di estratti spazzatura in sintesi
+#    → la sintesi (anch'essa reasoning) andava in loop di ripetizione.
+_THINK_RE = re.compile(r"<think>.*?</think>", re.S | re.I)
+
+
+def _strip_think(text: str) -> str:
+    if not text:
+        return text or ""
+    s = _THINK_RE.sub("", text)
+    i = s.lower().find("<think>")
+    if i >= 0:
+        s = s[:i]  # <think> mai chiuso (output troncato): via tutto da lì in poi
+    return s.replace("</think>", "").strip()
+
+
+class _ThinkFilter:
+    """Filtro INCREMENTALE per gli stream: sopprime <think>…</think> anche se i
+    tag arrivano spezzati tra chunk diversi. feed(chunk) → testo visibile;
+    flush() → coda residua a fine stream (dentro un think mai chiuso = '')."""
+    _OPEN, _CLOSE = "<think>", "</think>"
+
+    def __init__(self):
+        self._buf = ""
+        self._in_think = False
+        self._emitted = False
+
+    def feed(self, s: str) -> str:
+        self._buf += s or ""
+        out = []
+        while True:
+            if self._in_think:
+                i = self._buf.lower().find(self._CLOSE)
+                if i < 0:
+                    # resta nel think: tieni solo una coda che possa contenere
+                    # un tag di chiusura spezzato
+                    self._buf = self._buf[-(len(self._CLOSE) - 1):]
+                    break
+                self._buf = self._buf[i + len(self._CLOSE):]
+                self._in_think = False
+                if not self._emitted:
+                    self._buf = self._buf.lstrip()
+            i = self._buf.lower().find(self._OPEN)
+            if i >= 0:
+                pre = self._buf[:i]
+                if pre:
+                    out.append(pre)
+                self._buf = self._buf[i + len(self._OPEN):]
+                self._in_think = True
+                continue
+            # nessun tag completo: emetti tutto tranne un suffisso che potrebbe
+            # essere l'inizio spezzato di '<think>'
+            keep = 0
+            low = self._buf.lower()
+            for k in range(min(len(self._OPEN) - 1, len(low)), 0, -1):
+                if self._OPEN.startswith(low[-k:]):
+                    keep = k
+                    break
+            emit = self._buf[:len(self._buf) - keep] if keep else self._buf
+            self._buf = self._buf[len(self._buf) - keep:] if keep else ""
+            if emit:
+                out.append(emit)
+            break
+        vis = "".join(out)
+        if vis:
+            self._emitted = True
+        return vis
+
+    def flush(self) -> str:
+        if self._in_think:
+            self._buf = ""
+            return ""
+        b, self._buf = self._buf, ""
+        return b
 
 
 def _recent_history_text(history, n=6, max_chars=1400):
@@ -1044,12 +1457,18 @@ def _converse_stream(client, model, history, message):
             model=model, messages=messages, stream=True,
             max_tokens=AI_MAX_TOKENS, temperature=0.5,
         )
+        tf = _ThinkFilter()
         for chunk in stream:
             if not chunk.choices:
                 continue
             d = chunk.choices[0].delta
             if d and getattr(d, "content", None):
-                yield ("text", d.content)
+                vis = tf.feed(d.content)
+                if vis:
+                    yield ("text", vis)
+        tail = tf.flush()
+        if tail:
+            yield ("text", tail)
     except Exception as e:
         yield ("error", f"Errore: {e}")
     yield ("done", None)
@@ -1096,40 +1515,93 @@ def _recent_pool(hours, limit=30):
     return out
 
 
-def _agentic_retrieve(queries, recent_hours=0):
-    """Esegue le ricerche locali (sequenziali, veloci), fonde e ordina, e
-    garantisce la presenza di pagine web. Se `recent_hours`, aggiunge l'audio/
-    schermate recenti (per le domande temporali). Ritorna lista risultati (cap)."""
-    seen, pooled = set(), []
+def _prefetch_search(message):
+    """Ricerca 'head-start' col messaggio grezzo, lanciata IN PARALLELO al
+    router LLM (prima erano sequenziali: ~1-3s di latenza risparmiati)."""
+    try:
+        return search_module.query(message, top_k=AGENTIC_RESULTS_PER_QUERY)
+    except Exception as e:
+        print(f"[AI/agentic] prefetch fail: {e}")
+        return []
 
-    def _add(items):
-        for r in items:
+
+def _rrf_fuse(result_lists):
+    """Reciprocal Rank Fusion tra più liste ordinate: score = Σ 1/(60+rank).
+    Un risultato in alto in PIÙ sub-query batte uno score alto in una sola —
+    molto più robusto del sort per score grezzo (le scale coverage/cosine non
+    sono confrontabili tra loro). exact/score tenuti al massimo tra le liste."""
+    fused = {}   # (type,id) -> [result_dict, rrf]
+    for lst in result_lists:
+        for rank, r in enumerate(lst):
             key = (r.get("type"), r.get("id"))
-            if key in seen:
-                continue
-            seen.add(key); pooled.append(r)
+            e = fused.get(key)
+            if e is None:
+                fused[key] = [r, 1.0 / (60.0 + rank)]
+            else:
+                e[1] += 1.0 / (60.0 + rank)
+                if r.get("exact") and not e[0].get("exact"):
+                    e[0]["exact"] = True
+                if float(r.get("score", 0) or 0) > float(e[0].get("score", 0) or 0):
+                    e[0]["score"] = r.get("score")
+    ordered = sorted(fused.values(),
+                     key=lambda e: (not e[0].get("exact", False), -e[1],
+                                    -search_module._ts_int(e[0].get("ts", ""))))
+    return [e[0] for e in ordered]
 
-    for q in queries:
-        try:
-            _add(search_module.query(q, top_k=AGENTIC_RESULTS_PER_QUERY))
-        except Exception as e:
-            print(f"[AI/agentic] search '{q}' fail: {e}")
+
+def _fuse_lists(lists, cap, per_list_top=3):
+    """RRF + garanzia PER-LISTA: il top-`per_list_top` di OGNI lista entra nel
+    risultato. L'RRF premia ciò che compare in più liste — ma l'hit giusto di
+    una domanda specifica spesso sta in UNA lista sola e verrebbe affossato dal
+    rumore generico che matcha molte sub-query. Ritorna (top, pooled_completo)."""
+    pooled = _rrf_fuse(lists)
+    top = pooled[:cap]
+    inpool = {(r.get("type"), r.get("id")) for r in top}
+    must = []
+    for lst in lists:
+        for r in lst[:per_list_top]:
+            k = (r.get("type"), r.get("id"))
+            if k not in inpool:
+                must.append(r)
+                inpool.add(k)
+    if must:
+        top = top[: max(1, cap - len(must))] + must
+    return top, pooled
+
+
+def _agentic_retrieve(queries, recent_hours=0, prefetched=None):
+    """Ricerche locali in UNA passata (query_many: encode in un solo batch),
+    fusione RRF tra le sub-query (+ eventuale prefetch del messaggio grezzo),
+    e garanzia di presenza web/audio. Ritorna lista risultati (cap)."""
+    try:
+        per_query = search_module.query_many(queries, top_k=AGENTIC_RESULTS_PER_QUERY)
+    except Exception as e:
+        print(f"[AI/agentic] query_many fail, fallback sequenziale: {e}")
+        per_query = []
+        for q in queries:
+            try:
+                per_query.append(search_module.query(q, top_k=AGENTIC_RESULTS_PER_QUERY))
+            except Exception as e2:
+                print(f"[AI/agentic] search '{q}' fail: {e2}")
+
+    lists = list(per_query)
+    if prefetched:
+        lists.append(prefetched)
     if recent_hours:
-        _add(_recent_pool(recent_hours))
+        lists.append(_recent_pool(recent_hours))
 
-    # Escludi la UI di Déjà (la chat dove l'utente ha scritto la domanda): è la
-    # fonte di falsi positivi tipo "hai chiesto di riassumere la telefonata".
-    pooled = [r for r in pooled if not _is_deja_ui(r)]
+    # Escludi la UI di Déjà (la chat dove l'utente ha scritto la domanda) PRIMA
+    # della fusione, così non brucia posizioni di rank: è la fonte di falsi
+    # positivi tipo "hai chiesto di riassumere la telefonata".
+    lists = [[r for r in lst if not _is_deja_ui(r)] for lst in lists]
 
-    def _rank(r):
-        return (not r.get("exact", False), -float(r.get("score", 0) or 0),
-                -search_module._ts_int(r.get("ts", "")))
-    pooled.sort(key=_rank)
+    top, pooled = _fuse_lists(lists, AGENTIC_POOL_CAP)
     # Domanda temporale (telefonata/conversazione): l'audio è ciò che conta →
     # mettilo davanti così non viene soffocato da pagine web/schermate rumorose.
+    # (sort stabile: dentro ogni gruppo l'ordine RRF resta.)
     if recent_hours:
-        pooled.sort(key=lambda r: (r.get("type") != "audio", _rank(r)))
-    top = pooled[:AGENTIC_POOL_CAP]
+        top.sort(key=lambda r: r.get("type") != "audio")
+        pooled.sort(key=lambda r: r.get("type") != "audio")
 
     def _guarantee(kind, n):
         nonlocal top
@@ -1243,9 +1715,11 @@ def _agentic_worker(client, model, message, batch, max_out, temporal=False):
         return ""
 
 
-def _agentic_chat_stream(client, model, history, message, queries, recent_hours=0):
+def _agentic_chat_stream(client, model, history, message, queries, recent_hours=0,
+                         prefetched=None):
     """Pipeline agentica: ricerche → worker PARALLELI → sintesi stream.
-    `queries` arriva dal router. Dimensiona i lotti sui limiti REALI del modello
+    `queries` arriva dal router; `prefetched` è la ricerca head-start già fatta
+    in parallelo al router. Dimensiona i lotti sui limiti REALI del modello
     (context/output): ogni worker resta sotto il contesto per-call, ma N worker
     insieme processano molto più di 128K e producono più del limite di output
     singolo. Numero di agenti ∝ ampiezza della domanda (numero di angoli)."""
@@ -1260,7 +1734,15 @@ def _agentic_chat_stream(client, model, history, message, queries, recent_hours=
         head += f" · + audio ultime {recent_hours}h"
     yield ("tool", head)
 
-    pooled = _agentic_retrieve(queries, recent_hours)
+    pooled = _agentic_retrieve(queries, recent_hours, prefetched=prefetched)
+    if not pooled:
+        # ZERO risultati locali: inutile sintetizzare un "non ho trovato" —
+        # meglio passare al loop a tool (adattivo: finestre temporali, eventi,
+        # keyword diverse). L'evento 'nothing' lo segnala a chat_stream.
+        yield ("tool", "0 risultati dalle ricerche parallele")
+        yield ("nothing", None)
+        return
+
     # Agenti proporzionati all'ampiezza: domanda precisa (1 angolo) → pochi agenti.
     want = max(1, min(AGENTIC_MAX_WORKERS, len(queries)))
     batches = _pack_batches(pooled, message, per_worker_in, want) if pooled else []
@@ -1292,6 +1774,20 @@ def _agentic_chat_stream(client, model, history, message, queries, recent_hours=
     elif pooled:
         yield ("tool", "1 agente · analizzo i ricordi")
 
+    # Dedupe: worker diversi su lotti simili possono produrre estratti quasi
+    # identici → gonfiano il prompt di sintesi e inducono i modelli reasoning
+    # a loop di ripetizione ("Estratto 21, 22…").
+    findings = list(dict.fromkeys(findings))
+
+    if not findings:
+        # I worker hanno letto tutto il pool e nessuno ha trovato fatti utili:
+        # NON rispondere "non ho trovato" — il loop a tool (adattivo, con
+        # list_recent/list_by_date_range/list_system_events/get_memory_detail)
+        # ha molte più frecce. chat_stream farà il fallback.
+        yield ("tool", "nessun estratto utile dagli agenti")
+        yield ("nothing", None)
+        return
+
     # ── Sintesi finale (streaming) — usa il MAX OUTPUT del modello così le
     # risposte lunghe non vengono troncate. ──
     yield ("tool", "✍️ Sintesi finale…")
@@ -1305,6 +1801,9 @@ def _agentic_chat_stream(client, model, history, message, queries, recent_hours=
         "Se gli estratti NON contengono la risposta, scrivi una frase naturale che lo "
         "spiega (es. 'Non ho trovato nulla nei tuoi ricordi su …') — NON rispondere mai "
         "con la sola parola 'NIENTE' o con un sentinel.\n"
+        "FORMATO: scrivi SOLO la risposta finale per l'utente. NON ricopiare gli "
+        "estratti, NON scrivere intestazioni tipo '— Estratto N —', NON elencare i "
+        "ricordi uno per uno, NON ripetere due volte lo stesso fatto o blocco. "
         "Rispondi conciso, diretto, senza mostrare il ragionamento. "
         f"Rispondi sempre in {lang}." + _now_context()
     )
@@ -1329,11 +1828,17 @@ def _agentic_chat_stream(client, model, history, message, queries, recent_hours=
 
     # Guard anti-sentinel: bufferizza la testa della risposta; se è un "niente"
     # secco (es. il modello sputa 'NIENTE'), NON mostrarlo → frase naturale.
+    # frequency_penalty scoraggia i loop di ripetizione dei modelli reasoning
+    # (fallback senza se l'endpoint non lo supporta).
+    kwargs = dict(model=model, messages=messages, stream=True,
+                  max_tokens=out_tok, temperature=0.4, frequency_penalty=0.3)
     try:
-        stream = client.chat.completions.create(
-            model=model, messages=messages, stream=True,
-            max_tokens=out_tok, temperature=0.4,
-        )
+        try:
+            stream = client.chat.completions.create(**kwargs)
+        except Exception:
+            kwargs.pop("frequency_penalty", None)
+            stream = client.chat.completions.create(**kwargs)
+        tf = _ThinkFilter()   # sopprime <think>…</think> anche spezzato tra chunk
         parts, emitted = [], False
         for chunk in stream:
             if not chunk.choices:
@@ -1341,9 +1846,12 @@ def _agentic_chat_stream(client, model, history, message, queries, recent_hours=
             delta = chunk.choices[0].delta
             if not (delta and getattr(delta, "content", None)):
                 continue
-            parts.append(delta.content)
+            vis = tf.feed(delta.content)
+            if not vis:
+                continue
+            parts.append(vis)
             if emitted:
-                yield ("text", delta.content)
+                yield ("text", vis)
                 continue
             joined = "".join(parts)
             if len(joined) < 28:
@@ -1351,13 +1859,21 @@ def _agentic_chat_stream(client, model, history, message, queries, recent_hours=
             if _is_nothing(joined):
                 continue            # sembra un "niente": continua a bufferare
             yield ("text", joined); emitted = True
+        tail = tf.flush()
+        if tail:
+            parts.append(tail)
+            if emitted:
+                yield ("text", tail)
         full = "".join(parts).strip()
         if not emitted:
-            # Mai emesso: o è corto, o è un "niente" → output pulito.
+            # Mai emesso: o è corto, o è un "niente".
             if full and not _is_nothing(full):
                 yield ("text", full)
             else:
-                yield ("text", _NOTHING_MSG)
+                # Anche la sintesi dice "niente" → non mostrare una non-risposta:
+                # fallback al loop a tool (chat_stream).
+                yield ("nothing", None)
+                return
     except Exception as e:
         yield ("error", f"Sintesi fallita: {e}")
     yield ("done", None)
@@ -1381,20 +1897,57 @@ def chat_stream(history, message):
         yield ("done", None)
         return
 
+    # Sanifica la history: risposte assistant salvate PRIMA del filtro <think>
+    # possono contenere ragionamenti/estratti spazzatura → li ripulisce così
+    # non avvelenano i turni successivi (router, sintesi, tool loop).
+    history = [dict(m, content=_strip_think(m.get("content") or ""))
+               if m.get("role") == "assistant" else m
+               for m in (history or [])]
+
     # Ricerca agentica (opt-in): prima un ROUTER decide se vale la pena cercare
     # (no chiacchiera/saluti) e in quanti angoli (→ quanti agenti). Se non serve
-    # cercare, risponde conversazionalmente senza agenti. Se la pipeline fallisce
-    # a metà senza testo, degrada al loop a tool sequenziale.
+    # cercare, risponde conversazionalmente senza agenti. Se la pipeline non
+    # trova nulla ('nothing') o fallisce, degrada al loop a tool sequenziale.
+    agentic_missed = False   # agenti hanno cercato ma trovato NULLA
+    plan = None
     if agentic_enabled():
-        plan = _route_and_plan(client, model, history, message)
+        # Router LLM e ricerca head-start (query = messaggio grezzo) in
+        # PARALLELO: mentre il router pensa, il retrieval locale è già partito.
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        prefetch_fut = pool.submit(_prefetch_search, message)
+        try:
+            plan = _route_and_plan(client, model, history, message)
+        finally:
+            pool.shutdown(wait=False)
         if not plan["search"]:
+            # Chiacchiera: il prefetch non serve più. Se non è ancora partito
+            # lo si annulla — altrimenti OGNI "ciao" pagava una ricerca
+            # semantica completa in background (CPU + I/O su DB grandi).
+            prefetch_fut.cancel()
             yield from _converse_stream(client, model, history, message)
             return
-        produced = False
+        try:
+            prefetched = prefetch_fut.result(timeout=120)
+        except Exception:
+            prefetched = []
+        produced = False       # testo VERO mostrato all'utente
+        agentic_error = None   # errore trattenuto: mostrato solo se anche il
+                               # fallback fallisce (prima un 502 sulla sintesi
+                               # chiudeva il turno senza alcuna risposta)
         try:
             for ev in _agentic_chat_stream(client, model, history, message,
-                                           plan["queries"], plan.get("recent_hours", 0)):
-                if ev[0] in ("text", "error"):
+                                           plan["queries"], plan.get("recent_hours", 0),
+                                           prefetched=prefetched):
+                if ev[0] == "nothing":
+                    # Gli agenti non hanno trovato niente: NON è una risposta.
+                    # Si passa al loop a tool, che è adattivo (può cambiare
+                    # keyword, allargare finestre temporali, leggere eventi).
+                    agentic_missed = True
+                    break
+                if ev[0] == "error":
+                    agentic_error = ev[1]
+                    continue   # non mostrarlo: prima si tenta il loop a tool
+                if ev[0] == "text":
                     produced = True
                 if ev[0] == "done":
                     if produced:
@@ -1403,14 +1956,29 @@ def chat_stream(history, message):
                     break  # niente prodotto → prova il percorso normale
                 yield ev
         except Exception as e:
+            agentic_error = str(e)
             print(f"[AI] agentic fallita, fallback sequenziale: {e}")
         if produced:
             yield ("done", None)
             return
-        yield ("tool", "passo alla ricerca standard…")
+        yield ("tool", "🔁 Ricerca approfondita con i tool…" if agentic_error
+               else "🔁 Gli agenti non hanno trovato nulla: ricerca approfondita con i tool…")
 
     system_loc = (SYSTEM_PROMPT + _now_context()
                   + f"\n\nIMPORTANTE: rispondi sempre in {i18n.ai_language_name()}.")
+    # Se la pipeline agentica ha già provato certe query senza trovare nulla,
+    # dillo al modello: eviti che ripeta le stesse keyword e lo spingi su
+    # ANGOLI diversi (tool temporali/eventi, sinonimi, lettura integrale).
+    if agentic_missed and plan:
+        tried = ", ".join(f"'{q}'" for q in plan.get("queries", [])[:6])
+        system_loc += (
+            "\n\nNOTA: una ricerca parallela ha GIÀ provato senza risultati queste "
+            f"query su search_memories: {tried}. NON ripetere le stesse keyword: "
+            "cambia angolo — sinonimi/frasi che la persona avrebbe detto davvero, "
+            "list_recent o list_by_date_range se c'è un aggancio temporale, "
+            "list_system_events per app/file/download, get_memory_detail per "
+            "leggere integralmente un ricordo promettente."
+        )
     messages = [{"role": "system", "content": system_loc}] + list(history) + [
         {"role": "user", "content": message}
     ]
@@ -1418,26 +1986,36 @@ def chat_stream(history, message):
     budget = AI_CONTEXT_TOKENS - AI_MAX_TOKENS - 4000
     messages = _trim_history(messages, budget)
 
-    for _it in range(8):  # max 8 tool-call iterations (multi-step: 2-passi audio, fallback)
-        # Primo turno: FORZA una chiamata tool (tool_choice="required") così il
-        # modello non può rispondere "a memoria" inventando. Fallback se
-        # l'endpoint non supporta il parametro. Iterazioni successive: "auto"
-        # (deve poter chiudere con la risposta finale).
+    # Forzare un tool al primo giro impedisce di rispondere "a memoria"… ma su
+    # una chiacchiera ('ciao', 'grazie') faceva partire una search inutile e la
+    # risposta arrivava dopo una ricerca a vuoto. In modalità agentica ci pensa
+    # il router; qui basta un controllo deterministico, senza chiamate extra.
+    force_first_tool = not _looks_like_smalltalk(message)
+    last_tool_names = []
+
+    for _it in range(MAX_TOOL_ITERATIONS):
+        # Ri-trimma a OGNI giro: i risultati dei tool si accumulano e senza
+        # questo si sfora il contesto dopo 3-4 iterazioni (vedi _trim_for_tools).
+        messages = _trim_for_tools(messages, budget)
         # temperature 0.45 + frequency_penalty: evitano i loop di ripetizione
         # (con temp troppo bassa + contesto ripetitivo il modello si incarta).
         kwargs = dict(model=model, messages=messages, tools=TOOLS, stream=True,
-                      max_tokens=AI_MAX_TOKENS, temperature=0.45, frequency_penalty=0.3)
-        if _it == 0:
+                      max_tokens=AI_MAX_TOKENS, temperature=0.45)
+        if _ep_supports("frequency_penalty"):
+            kwargs["frequency_penalty"] = 0.3
+        if _it == 0 and force_first_tool and _ep_supports("tool_choice"):
             kwargs["tool_choice"] = "required"
         try:
             stream = client.chat.completions.create(**kwargs)
         except Exception as e:
-            # Alcuni endpoint non accettano tool_choice="required" e/o
-            # frequency_penalty: riprova una volta SENZA i parametri opzionali.
-            had_opt = ("tool_choice" in kwargs) or ("frequency_penalty" in kwargs)
-            kwargs.pop("tool_choice", None)
-            kwargs.pop("frequency_penalty", None)
-            if had_opt:
+            # Endpoint che non accetta tool_choice/frequency_penalty: riprova
+            # senza E MEMORIZZA la capability, altrimenti ogni iterazione (e ogni
+            # messaggio successivo) sprecava una chiamata destinata a fallire.
+            dropped = [k for k in ("tool_choice", "frequency_penalty") if k in kwargs]
+            for k in dropped:
+                kwargs.pop(k, None)
+            if dropped:
+                _ep_mark_unsupported(dropped, e)
                 try:
                     stream = client.chat.completions.create(**kwargs)
                 except Exception as e2:
@@ -1452,6 +2030,7 @@ def chat_stream(history, message):
         text_buf = []
         tool_acc = {}  # index -> {id, name, args}
         finish = None
+        tf = _ThinkFilter()  # niente <think> dei reasoning a schermo/in history
 
         try:
             for chunk in stream:
@@ -1461,8 +2040,10 @@ def chat_stream(history, message):
                 delta = choice.delta
 
                 if delta and getattr(delta, "content", None):
-                    text_buf.append(delta.content)
-                    yield ("text", delta.content)
+                    vis = tf.feed(delta.content)
+                    if vis:
+                        text_buf.append(vis)
+                        yield ("text", vis)
 
                 if delta and getattr(delta, "tool_calls", None):
                     for tc in delta.tool_calls:
@@ -1478,6 +2059,10 @@ def chat_stream(history, message):
 
                 if choice.finish_reason:
                     finish = choice.finish_reason
+            tail = tf.flush()
+            if tail:
+                text_buf.append(tail)
+                yield ("text", tail)
         except Exception as e:
             yield ("error", f"Stream error: {e}")
             yield ("done", None)
@@ -1502,6 +2087,7 @@ def chat_stream(history, message):
             messages.append(assistant_msg)
 
             # Execute tools
+            last_tool_names = []
             for i, v in sorted(tool_acc.items()):
                 name = v["name"]
                 raw_args = v["args"] or "{}"
@@ -1509,9 +2095,10 @@ def chat_stream(history, message):
                     args = json.loads(raw_args)
                 except Exception:
                     args = {}
+                last_tool_names.append(name)
                 label = f"{name}({', '.join(f'{k}={json.dumps(va, ensure_ascii=False)}' for k, va in args.items())})"
-                yield ("tool", label)
-                result = _execute_tool(name, args)
+                yield ("tool", label[:400])
+                result = _clip_tool_result(_execute_tool(name, args))
                 messages.append({
                     "role": "tool",
                     "tool_call_id": v["id"] or f"call_{i}",
@@ -1523,7 +2110,41 @@ def chat_stream(history, message):
         yield ("done", None)
         return
 
-    yield ("error", "Limite iterazioni tool raggiunto.")
+    # Iterazioni esaurite. Prima si chiudeva con un errore secco e ZERO risposta,
+    # buttando via tutto ciò che i tool avevano già raccolto. Ora un ultimo giro
+    # SENZA tool: il modello DEVE rispondere con quello che ha in mano.
+    yield ("tool", "✍️ Chiudo con quello che ho raccolto…")
+    messages = _trim_for_tools(messages, budget)
+    messages.append({
+        "role": "user",
+        "content": ("Basta ricerche. Rispondi ORA alla mia domanda usando SOLO i "
+                    "risultati dei tool qui sopra. Se sono parziali dillo, ma dammi "
+                    "comunque ciò che hai trovato — non lasciarmi senza risposta."),
+    })
+    try:
+        stream = client.chat.completions.create(
+            model=model, messages=messages, stream=True,
+            max_tokens=AI_MAX_TOKENS, temperature=0.4)
+        tf = _ThinkFilter()
+        got = False
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            d = chunk.choices[0].delta
+            if d and getattr(d, "content", None):
+                vis = tf.feed(d.content)
+                if vis:
+                    got = True
+                    yield ("text", vis)
+        tail = tf.flush()
+        if tail:
+            got = True
+            yield ("text", tail)
+        if not got:
+            yield ("error", "Non sono riuscito a chiudere la risposta: riprova a "
+                            "riformulare la domanda in modo più specifico.")
+    except Exception as e:
+        yield ("error", f"Limite iterazioni raggiunto e chiusura fallita: {e}")
     yield ("done", None)
 
 # ── Inline RAG (non-streaming) ─────────────────────────────────────
@@ -1535,21 +2156,23 @@ def rag_inline(query, results):
         return f"⚠ {e}"
     if not results:
         return "Nessun ricordo per questa query."
-    ctx = _fmt_results(results[:AI_RAG_TOP_K], query=query, max_chars=600, web_max_chars=1400)
+    ctx = _fmt_results(results[:AI_RAG_TOP_K], query=query, max_chars=700, web_max_chars=1600)
     try:
         resp = client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": (
                     "Sintetizza in italiano in 2-3 frasi una risposta alla domanda dell'utente "
-                    "basandoti SOLO sui ricordi forniti. Cita timestamp/app se utile. "
-                    "Se i ricordi non contengono la risposta, dillo."
+                    "basandoti SOLO sui ricordi forniti (non inventare nulla che non sia nel "
+                    "testo: numeri, prezzi e orari VERBATIM). Cita timestamp/app se utile. "
+                    "Se i ricordi non contengono la risposta, dillo in una frase."
+                    + _now_context()
                 )},
                 {"role": "user", "content": f"Domanda: {query}\n\nRicordi rilevanti:\n{ctx}"},
             ],
             max_tokens=400,
-            temperature=0.4,
+            temperature=0.3,
         )
-        return resp.choices[0].message.content.strip()
+        return _strip_think(resp.choices[0].message.content or "")
     except Exception as e:
         return f"⚠ Errore AI: {e}"

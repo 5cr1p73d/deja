@@ -6,7 +6,7 @@ import paths
 paths.configure_model_cache()
 
 # Versione app (mostrata in About / log / installer).
-APP_VERSION        = "1.3.0"
+APP_VERSION        = "1.4.0"
 APP_NAME           = "Déjà"
 
 # Percorsi consumer-safe (user data dir scrivibile, non la CWD).

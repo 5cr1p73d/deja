@@ -25,14 +25,22 @@ def _project_dir() -> str:
 
 
 def data_dir() -> str:
-    """Cartella dati scrivibile dell'utente. Creata se manca."""
-    base = (
-        os.environ.get("LOCALAPPDATA")
-        or os.environ.get("APPDATA")
-        or os.path.expanduser("~")
-    )
+    """Cartella dati scrivibile dell'utente. Creata se manca.
+    Windows: %LOCALAPPDATA%\\Deja. Linux/altri: XDG_DATA_HOME (default
+    ~/.local/share) — creata con permessi 0700 (solo utente)."""
+    if sys.platform == "win32":
+        base = (
+            os.environ.get("LOCALAPPDATA")
+            or os.environ.get("APPDATA")
+            or os.path.expanduser("~")
+        )
+        d = os.path.join(base, APP_NAME)
+        os.makedirs(d, exist_ok=True)
+        return d
+    base = os.environ.get("XDG_DATA_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "share")
     d = os.path.join(base, APP_NAME)
-    os.makedirs(d, exist_ok=True)
+    os.makedirs(d, mode=0o700, exist_ok=True)
     return d
 
 
@@ -51,10 +59,20 @@ def db_path() -> str:
 
 
 def harden_data_dir_acl() -> None:
-    """Restringe la cartella dati al solo utente corrente (rimuove ereditarietà
-    e altri principal): difesa in profondità su PC multi-utente. Idempotente
-    via marker; best-effort, non blocca l'avvio se fallisce. Solo Windows."""
+    """Restringe la cartella dati al solo utente corrente: difesa in profondità
+    su PC multi-utente. Idempotente via marker; best-effort, non blocca l'avvio
+    se fallisce. Windows: icacls. Linux: chmod 700/600 (equivalente POSIX)."""
     if os.name != "nt":
+        # POSIX: dir 0700, file sensibili 0600. Economico → niente marker.
+        try:
+            d = data_dir()
+            os.chmod(d, 0o700)
+            for name in ("deja.db", "deja.db-wal", "deja.db-shm", "dbkey.bin"):
+                p = os.path.join(d, name)
+                if os.path.exists(p):
+                    os.chmod(p, 0o600)
+        except Exception:
+            pass
         return
     import subprocess
     d = data_dir()
@@ -121,13 +139,17 @@ def find_tesseract() -> str | None:
     which = shutil.which("tesseract")
     if which:
         candidates.append(which)
-    local = os.environ.get("LOCALAPPDATA", "")
-    candidates += [
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-        os.path.join(local, "Programs", "Tesseract-OCR", "tesseract.exe") if local else "",
-        resource_path(os.path.join("tesseract", "tesseract.exe")),  # eventuale copia bundlata
-    ]
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", "")
+        candidates += [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            os.path.join(local, "Programs", "Tesseract-OCR", "tesseract.exe") if local else "",
+            resource_path(os.path.join("tesseract", "tesseract.exe")),  # eventuale copia bundlata
+        ]
+    else:
+        candidates += ["/usr/bin/tesseract", "/usr/local/bin/tesseract",
+                       "/opt/homebrew/bin/tesseract"]
     for c in candidates:
         if c and os.path.exists(c):
             return c

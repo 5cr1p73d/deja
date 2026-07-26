@@ -174,6 +174,10 @@ def _process_file(conn, path, ev_flags=None):
 
 _EV_CATS = ("download", "tab", "visit")
 _last_cfg = None
+_last_cfg_ts = 0.0
+# L'autorizzazione è anche un HEARTBEAT: la si riscrive almeno ogni N secondi
+# così l'host può capire se l'app è ancora viva (vedi `_write_events_cfg`).
+_CFG_HEARTBEAT = 30.0
 
 
 def _events_cfg_path():
@@ -181,21 +185,29 @@ def _events_cfg_path():
 
 
 def _write_events_cfg(eff):
-    """Pubblica per l'host nativo QUALI eventi browser è autorizzato a scrivere
-    nello spool. Senza questo gate l'host scriverebbe SEMPRE (cronologia in
+    """Pubblica per l'host nativo COSA è autorizzato a scrivere nello spool:
+    le categorie evento (download/tab/visit) e la chiave `page` (testo integrale
+    delle pagine). Senza questo gate l'host scriverebbe SEMPRE (cronologia in
     chiaro su disco) anche con i toggle OFF: così invece, con tutto OFF/pausa,
-    l'host non scrive nulla. Scrittura atomica, solo se cambia."""
-    global _last_cfg
-    if eff == _last_cfg:
+    l'host non scrive nulla. Scrittura atomica.
+
+    Il campo `ts` rende l'autorizzazione un heartbeat a scadenza: l'host la
+    considera valida solo se fresca. Serve perché l'host vive quanto il BROWSER,
+    non quanto Déjà — se l'app viene killata/crasha (niente revoca a chiusura)
+    il cfg restava sull'ultimo stato "ON" e l'host continuava a spoolare
+    cronologia in chiaro per sempre, senza nessuno a ingerirla o purgarla."""
+    global _last_cfg, _last_cfg_ts
+    now = time.time()
+    if eff == _last_cfg and (now - _last_cfg_ts) < _CFG_HEARTBEAT:
         return
     try:
         import tempfile
         d = paths.data_dir()
         fd, tmp = tempfile.mkstemp(dir=d, suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(eff, f)
+            json.dump(dict(eff, ts=now), f)
         os.replace(tmp, _events_cfg_path())
-        _last_cfg = dict(eff)
+        _last_cfg, _last_cfg_ts = dict(eff), now
     except Exception:
         pass
 
@@ -212,6 +224,9 @@ def run(stop_event):
             # Effettivo = toggle ON e bridge attivo e non in pausa. È ciò che
             # l'host può scrivere: in pausa o con feature OFF → niente su disco.
             eff = {c: (raw[c] and bridge and not paused) for c in _EV_CATS}
+            # Il testo delle pagine dipende solo dal bridge (non ha toggle per
+            # categoria): stessa regola — OFF o in pausa ⇒ niente su disco.
+            eff["page"] = bridge and not paused
             _write_events_cfg(eff)
             if bridge and not paused:
                 for path in sorted(glob.glob(os.path.join(_inbox_dir(), "*.json"))):
@@ -221,5 +236,10 @@ def run(stop_event):
         except Exception:
             _log.exception("Errore ciclo web_ingest")
         stop_event.wait(timeout=3)
+    # App in chiusura: revoca ogni autorizzazione all'host. Senza questo il
+    # cfg restava sull'ultimo stato "tutto ON" e il native host continuava a
+    # spoolare cronologia e testo delle pagine in chiaro con Déjà CHIUSA
+    # (nessuno le ingerisce né le purga finché l'app non riparte).
+    _write_events_cfg({c: False for c in (*_EV_CATS, "page")})
     conn.close()
     print("[WebIngest] Fermato.")

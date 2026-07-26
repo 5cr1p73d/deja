@@ -610,6 +610,13 @@ class _NetWatch:
 
 # ── Loop principale ─────────────────────────────────────────────────
 def run(stop_event):
+    # Linux: i collector usano API Windows (winreg, EnumWindows, TickCount…).
+    # Porting = fase 2 (DBus/udev). Feature comunque OFF di default: qui si
+    # esce subito, l'app funziona senza eventi di sistema.
+    import sys as _sys
+    if _sys.platform != "win32":
+        print("[SysEvents] Non supportato su questa piattaforma (fase 2): disattivato.")
+        return
     # Dipendenze opzionali verificate UNA volta (niente spam di eccezioni nel
     # loop se il build ne è privo): senza psutil cadono processi/device/rete,
     # senza watchdog cadono i file. Il resto (ctypes/winreg) è stdlib.
